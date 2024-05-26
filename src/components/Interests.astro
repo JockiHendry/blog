@@ -1,0 +1,51 @@
+---
+import { getCollection } from 'astro:content';
+const entries = await getCollection('docs', ({id, data}) => id.startsWith('blog/'));
+const tagSize = new Map<string, number>();
+for (const entry of entries) {
+    const entryTags = entry.data.tags;
+    if (entryTags == null) {
+        continue;
+    }
+    for (const tag of entryTags) {
+        if (tagSize.has(tag)) {
+            tagSize.set(tag, Number(tagSize.get(tag)) + 1);
+        } else {
+            tagSize.set(tag, 1);
+        }
+    }
+}
+const chartDataSource = Array.from(tagSize);
+---
+
+<div>
+    <div id="tags-cloud-container" style="width: 100%;"></div>        
+</div>
+
+<script is:inline src="/highcharts.js"></script>
+<script is:inline src="/wordcloud.js"></script>
+<script define:vars={{ chartDataSource }}>
+    const chart = Highcharts.chart('tags-cloud-container', {        
+        series: [{
+            cursor: 'pointer',
+            events: {
+                click: function(event) {
+                    if (event.point && event.point.name) {
+                        window.location.href = "/blog/tags/" + event.point.name.toLowerCase();
+                    }
+
+                }
+            },
+            type: 'wordcloud',
+            data: chartDataSource,
+            name: 'Posts Count',
+            placementStrategy: 'center',            
+        }],
+        title: {
+            text: '',
+        },
+        credits: {
+            enabled: false,
+        }
+    });
+</script>

@@ -1,0 +1,26 @@
+---
+---
+<pre id="ip-output">
+</pre>
+
+<script is:inline>
+    const output = document.getElementById("ip-output");
+    output.textContent = "Starting...\n";
+    const connection = new RTCPeerConnection({
+        iceServers: [{
+            urls: 'stun:stun.l.google.com:19302'
+        }]
+    });
+    connection.createDataChannel('dummyChannel');
+    connection.createOffer()
+        .then((offer) => connection.setLocalDescription(offer))
+        .then(() => output.textContent += "Offer created...\n");
+    connection.onicecandidate = (event) => { 
+        if ((event == null) || (event.candidate == null) || (event.candidate.candidate === '')) {
+            output.textContent += 'Done.\n';
+            connection.close();
+            return;
+        }         
+        output.textContent += `Received address ${event.candidate.address}:${event.candidate.port}\n`;
+    };
+</script>

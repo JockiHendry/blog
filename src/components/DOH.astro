@@ -1,0 +1,187 @@
+---
+---
+
+<style>
+.spinner {
+  margin-left: 10px;  
+  width: 70px;
+  text-align: center;
+}
+
+.spinner > div {
+  width: 10px;
+  height: 10px;
+  background-color: #333;
+
+  border-radius: 100%;
+  display: inline-block;
+  -webkit-animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+  animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+}
+
+.spinner .bounce1 {
+  -webkit-animation-delay: -0.32s;
+  animation-delay: -0.32s;
+}
+
+.spinner .bounce2 {
+  -webkit-animation-delay: -0.16s;
+  animation-delay: -0.16s;
+}
+
+@-webkit-keyframes sk-bouncedelay {
+  0%, 80%, 100% { -webkit-transform: scale(0) }
+  40% { -webkit-transform: scale(1.0) }
+}
+
+@keyframes sk-bouncedelay {
+  0%, 80%, 100% { 
+    -webkit-transform: scale(0);
+    transform: scale(0);
+  } 40% { 
+    -webkit-transform: scale(1.0);
+    transform: scale(1.0);
+  }
+}
+</style>
+
+
+<div>
+    <label for="domainName" class="block text-gray-700 font-bold text-sm">Domain name</label>
+    <div class="mt-2">
+        <input type="text" name="domainName" id="domainName" class="shadow border rounded w-full py-2 px-3 focus:outline-none focus:shadow-outline" 
+            minlength="3" placeholder="www.google.com"/>
+    </div>
+</div>
+<button id="search" type="button" class="bg-blue-500 hover:bg-blue-700 text-white font-bold px-3 border border-blue-700 rounded cursor-pointer">Perform DNS Lookup</button>	
+<div class="spinner invisible">
+    <div class="bounce1"></div>
+    <div class="bounce2"></div>
+    <div class="bounce3"></div>
+</div>
+<pre id="output" class="overflow-scroll">
+</pre>
+
+<script>
+    interface DNSResponse {
+        Status: number;
+        TC: boolean;
+        RD: boolean;
+        RA: boolean;
+        AD: boolean;
+        CD: boolean;
+        Question: {name: string, type: number}[];
+        Answer: {name: string, type: number, TTL: number, data: string}[];
+    }
+
+    interface ErrorResponse {
+        error: string;
+    }
+
+    const RRTypes = new Map<number,string>([    
+        [1, "A"],
+        [2, "NS"],        
+        [5, "CNAME"],
+        [6, "SOA"],
+        [7, "MB"],
+        [8, "MG"],
+        [9, "MR"],
+        [10, "NULL"],
+        [11, "WKS"],
+        [12, "PTR"],
+        [13, "HINFO"],
+        [14, "MINFO"],
+        [15, "MX"],
+        [16, "TXT"],        
+        [17, "RP"]
+    ]);
+
+    async function resolve(domainName: string, type: number): Promise<DNSResponse> {
+        const resp = await fetch(`https://cloudflare-dns.com/dns-query?ct=application/dns-json&name=${domainName}&type=${type}`, {
+            headers: {
+                'Accept': 'application/dns-json'
+            }
+        });
+        const jsonResponse = await resp.json();
+        if (!resp.ok) {
+            throw new Error(`DNS lookup error [${resp.status}]: [${(jsonResponse as ErrorResponse).error}]`);                        
+        }
+        return jsonResponse as DNSResponse;
+    }
+
+    function getRCodeName(rc: number): string {
+        switch (rc) {
+            case 0: return "No Error";
+            case 1: return "Format Error (FormErr)";
+            case 2: return "Server Failure (ServFail)";
+            case 3: return "Non-Existent Domain (NXDomain)";
+            case 4: return "Not Implemented (NotImp)";
+            case 5: return "Query Refused";
+            case 6: return "Name Exists when it should not (YXDomain)";
+            case 7: return "RR Set Exists when it should not (YXRRSet)";
+            case 8: return "RR Set that should exist does not (NXRRSET)";
+            case 9: return "Not authorized";
+            case 10: return "Name not contained in zone";
+            case 11: return "DSO-TYPE Not Implemented";
+            case 16: return "Bad OPT Version";
+            case 17: return "TSIG Signature Failure";
+            case 18: return "Signature out of time window";
+            case 19: return "Bad TKEY Mode";
+            case 20: return "Duplicate key name";
+            case 21: return "Algorithm not supported";
+            case 22: return "Bad Truncation";
+            case 23: return "Bad/missing Server Cookie";
+            default: return "Unknown status"
+        }
+    }
+
+    async function doResolve(domainName: string, recordType: number, output: HTMLElement) {
+        try {
+            output.textContent += `Querying record [${RRTypes.get(recordType)}]\n`;
+            const response = await resolve(inputDomainName.value, recordType);                
+            output.textContent += `Status: ${getRCodeName(response.Status)}\n`;
+            response.Question.forEach(q => output.textContent += `Question: ${q.name} Type ${RRTypes.get(q.type)}\n`);
+            if (response.Answer == null || response.Answer.find(a => a.type === recordType) == null) {
+                output.textContent += 'No Answer\n';
+            } else {
+                if (response.TC) {
+                    output.textContent += `Response was truncated!\n`;
+                }
+                if (response.RD) {
+                    output.textContent += `Recursive Desired bit was set\n`;
+                }
+                if (response.RA) {
+                    output.textContent += `Recursion Available bit was set\n`;
+                }
+                if (response.AD) {
+                    output.textContent += `Answer was verified with DNSSEC\n`;
+                }
+                if (response.CD) {
+                    output.textContent += `Client asked to disable DNSSEC validation\n`;
+                }        
+                response.Answer.forEach(a => output.textContent += `Answer: ${a.data} Owner ${a.name} Type ${RRTypes.get(a.type)}\n`);
+            }            
+            output.textContent += '\n';
+        } catch (e) {
+            output.textContent = e as string;        
+        }                
+    }
+    
+    const button = document.getElementById('search')!;
+    const spinner = document.querySelector('.spinner')!;
+    const inputDomainName = document.getElementById('domainName')! as HTMLInputElement;    
+    const output = document.getElementById('output')!    
+
+    button.addEventListener('click', async (e) => {
+        output.textContent = '';
+        spinner.classList.remove('invisible'); 
+        if (inputDomainName.value) {
+            for (const [k, v] of RRTypes.entries()) {
+                await doResolve(inputDomainName.value, k, output);
+            }                                    
+        } else {
+            output.textContent = 'Invalid domain name!';            
+        }
+        spinner.classList.add('invisible');         
+    });
+</script>
