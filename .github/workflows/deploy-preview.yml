@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4      
       - run: npm ci
-      - run: npm init playwright@latest
+      - run: npx playwright install --with-deps
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: "${{ secrets.GITHUB_TOKEN }}"
