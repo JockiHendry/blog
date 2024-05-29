@@ -9,7 +9,8 @@ jobs:
   deploy_live_website:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4      
+      - uses: actions/checkout@v4
+      - run: npm ci    
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           firebaseServiceAccount: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}"
