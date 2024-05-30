@@ -34,13 +34,14 @@ export default defineConfig({
   }), mdx(), tailwind({
     applyBaseStyles: false,
   }), serviceWorker({
-    workbox: {
+    workbox: {      
       manifestTransforms: [
         (manifest) => {          
           manifest.forEach(m => m.url = (m.url.endsWith('/index.html')) ? m.url.substring(0, m.url.length - 11) : m.url)
           return { manifest }                    
         }
       ],
+      ignoreURLParametersMatching: [/^utm_/, /^fbclid$/, /ts$/],
       runtimeCaching: [{
         urlPattern: () => true,
         handler: "StaleWhileRevalidate",        
