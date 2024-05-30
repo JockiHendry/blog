@@ -44,11 +44,12 @@ export default defineConfig({
       ignoreURLParametersMatching: [/^utm_/, /^fbclid$/, /ts$/],
       runtimeCaching: [{
         urlPattern: () => true,
-        handler: "StaleWhileRevalidate",        
+        handler: "StaleWhileRevalidate",
       }],        
     }
   })],
   markdown: {
     rehypePlugins: [[rehypeMermaid, {strategy: "img-svg"}]],
-  }
+  },
+  trailingSlash: 'never',
 });
