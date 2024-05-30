@@ -138,7 +138,7 @@
     async function doResolve(domainName: string, recordType: number, output: HTMLElement) {
         try {
             output.textContent += `Querying record [${RRTypes.get(recordType)}]\n`;
-            const response = await resolve(inputDomainName.value, recordType);                
+            const response = await resolve(domainName, recordType);                
             output.textContent += `Status: ${getRCodeName(response.Status)}\n`;
             response.Question.forEach(q => output.textContent += `Question: ${q.name} Type ${RRTypes.get(q.type)}\n`);
             if (response.Answer == null || response.Answer.find(a => a.type === recordType) == null) {
@@ -172,11 +172,11 @@
     const inputDomainName = document.getElementById('domainName')! as HTMLInputElement;    
     const output = document.getElementById('output')!    
 
-    button.addEventListener('click', async (e) => {
+    button.addEventListener('click', async () => {
         output.textContent = '';
         spinner.classList.remove('invisible'); 
         if (inputDomainName.value) {
-            for (const [k, v] of RRTypes.entries()) {
+            for (const [k, _] of RRTypes.entries()) {
                 await doResolve(inputDomainName.value, k, output);
             }                                    
         } else {

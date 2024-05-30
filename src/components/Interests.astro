@@ -1,6 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
-const entries = await getCollection('docs', ({id, data}) => id.startsWith('blog/'));
+const entries = await getCollection('docs', ({id}) => id.startsWith('blog/'));
 const tagSize = new Map<string, number>();
 for (const entry of entries) {
     const entryTags = entry.data.tags;
@@ -19,25 +19,27 @@ const chartDataSource = Array.from(tagSize);
 ---
 
 <div>
-    <div id="tags-cloud-container" style="width: 100%;"></div>        
+    <div id="tags-cloud-container" style="width: 100%;" data-source={JSON.stringify(chartDataSource)}></div>        
 </div>
 
 <script is:inline src="/highcharts.js"></script>
 <script is:inline src="/wordcloud.js"></script>
-<script define:vars={{ chartDataSource }}>
-    const chart = Highcharts.chart('tags-cloud-container', {        
+<script> 
+    import { slug } from 'github-slugger';        
+    const dataSource = JSON.parse(document.getElementById('tags-cloud-container')!.dataset.source!);
+    // @ts-ignore
+    Highcharts.chart('tags-cloud-container', {        
         series: [{
             cursor: 'pointer',
             events: {
-                click: function(event) {
+                click: function(event: any) {
                     if (event.point && event.point.name) {
-                        window.location.href = "/blog/tags/" + event.point.name.toLowerCase();
+                        window.location.href = "/blog/tags/" + slug(event.point.name);
                     }
-
                 }
             },
             type: 'wordcloud',
-            data: chartDataSource,
+            data: dataSource,
             name: 'Posts Count',
             placementStrategy: 'center',            
         }],
