@@ -18,3 +18,4 @@ jobs:
           projectId: blog-f59d2
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
+          MODE: staging
