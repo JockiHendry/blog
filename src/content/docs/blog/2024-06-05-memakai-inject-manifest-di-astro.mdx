@@ -149,6 +149,10 @@ precache(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 ```
 
+:::danger
+*Pre-caching* dengan `precache()` akan selalu memakai strategi `CacheFirst` yang tidak bisa diganti.  Bila sebuah rute telah menggunakan strategi lain seperti `StaleWhileRevalidate`, isi dari *pre-caching* ttidak akan dipakai!
+:::
+
 Nilai `self.__WB_MANIFEST` pada kode program di atas adalah sesuatu yang unik.  Nilai ini akan dimodifikasi secara otomatis nanti oleh `injectManifest()` yang akan menelusuri seluruh daftar aset yang tersedia.  Lihat bagian [workbox-build](#workbox-build) untuk informasi lebih lanjut mengenai `injectManifest()`.
 
 :::caution
