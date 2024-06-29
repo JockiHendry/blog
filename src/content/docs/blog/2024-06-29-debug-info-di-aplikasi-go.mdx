@@ -1,0 +1,377 @@
+---
+title: Aplikasi Go Mengandung Debug Info Secara Default
+date: 2024-06-29
+tags: [Go]
+excerpt: Saya memilih Go karena saya bisa menjalankan aplikasi ini secara langsung tanpa perlu instalasi tambahan.  Saya cukup menggunakan perintah `go build` untuk menghasilkan file binary `jch-metadata` yang bisa langsung dijalankan di Linux atau `GOOS=windows GOARCH=amd64 go build` untuk menghasilkan file binary `jch-metadata.exe` yang bisa langsung dijalankan di Windows.  Namun, saya cukup terkejut saat menemukan bahwa aplikasi yang saya buat untuk membaca metadata tersebut ternyata juga mengandung metadata yang bisa mengidentifikasi saya...
+---
+
+Pada saat saya sedang meningkatkan pengetahuan forensik digital dengan memahami metadata apa saja yang tersimpan dalam file multimedia (seperti video & audio), saya menulis sebuah program Go [jch-metadata](https://github.com/JockiHendry/jch-metadata) sebagai latihan praktikum-nya.  Saya memilih Go karena saya bisa menjalankan aplikasi ini secara langsung tanpa perlu instalasi tambahan.  Saya cukup menggunakan perintah `go build` untuk menghasilkan file binary `jch-metadata` yang bisa langsung dijalankan di Linux atau `GOOS=windows GOARCH=amd64 go build` untuk menghasilkan file binary `jch-metadata.exe` yang bisa langsung dijalankan di Windows.  Namun, saya cukup terkejut saat menemukan bahwa aplikasi yang saya buat untuk membaca metadata tersebut ternyata juga mengandung metadata yang bisa dipakai untuk mengidentifikasi saya!
+
+## Pembuktian
+
+Untuk menunjukkannya, saya akan membuat sebuah aplikasi Go sederhana seperti berikut ini:
+
+```go title="main.go"
+package main
+
+import (
+	"fmt"
+	"runtime/debug"
+)
+
+func main() {
+   err := fmt.Errorf("This error is raised on purpose")
+   debug.PrintStack()
+   panic(err)
+}
+```
+
+Kode program di atas akan mencetak *stack* dan berhenti dengan pesan kesalahan.  Saya dapat men-*build* kode program di atas dengan perintah seperti berikut ini:
+
+```shell
+go mod init test
+go build
+```
+
+Hasilnya adalah sebuah binary dengan nama `test`.  Ini adalah aplikasi publik yang dapat saya distribusikan tanpa harus mempublikasikan kode program saya. Bila saya menjalankan aplikasi ini di komputer lain, saya akan menemukan hasil seperti berikut ini:
+
+```shell
+./test
+ 
+### OUTPUT:
+###
+### goroutine 1 [running]:
+### runtime/debug.Stack()
+### 	/tmp/go/sdk/go1.19.4/src/runtime/debug/stack.go:24 +0x65
+### runtime/debug.PrintStack()
+### 	/tmp/go/sdk/go1.19.4/src/runtime/debug/stack.go:16 +0x19
+### main.main()
+### 	/tmp/test/main.go:10 +0x3b
+### panic: This error is raised on purpose
+### 
+### goroutine 1 [running]:
+### main.main()
+###	   /tmp/test/main.go:11 +0x53
+```
+
+Terlihat bahwa aplikasi tetap mencetak lokasi Go SDK di komputer yang saya pakai untuk melakukan *building*.  Selain itu, aplikasi ini juga tetap menyimpan informasi nama file di kode program Go saya: `/tmp/test/main.go`.  Fitur ini sangat bagus untuk mempermudah *troubleshooting* bila terdapat kesalahan yang dilaporkan oleh pengguna karena terdapat informasi nama file dan nomor baris secara detail di pesan kesalahan.
+
+Walaupun demikian, informasi ini juga dapat dipakai untuk menebak sistem operasi dan nama user yang saya pakai.  Sebagai contoh, nama file seperti `/home/developer/Documents/app/main.go` menunjukkan bahwa ini file ini dibuat di Linux dengan nama user `developer`.  Ini mungkin bukan informasi sensitif bila seandainya proses *building* dilakukan secara otomatis lewat *container* yang tidak permanen, namun informasi ini menjadi lebih berharga bila proses *build* dilakukan langsung dari laptop kerja-nya programmer.  Untuk beberapa kasus, seperti pengembangan *malware*, informasi ini sensitif karena bisa dipakai untuk klasifikasi oleh tim *threat intel* (misalnya mendeteksi apakah beberapa *malware* berbeda dibuat oleh programmer yang sama).
+
+:::note
+Walaupun terlihat tidak berbahaya, metadata bisa memberikan informasi berguna bagi penyerang.  Sebagai contoh, saat mencari metadata di tool CLI-nya Google yang dibuat dengan Go, saya menemukan *dependency* ke *private repository* di domain `cnrm.git.corp.google.com`.  Saat membuka halaman ini, saya diarahkan ke halaman https://login.corp.google.com.  Ini membuat saya berpikir bahwa domain `corp.google.com` adalah domain untuk keperluan internal yang dipakai oleh karyawan Google.
+:::
+
+Apa saja metadata yang tersimpan di sebuah aplikasi yang dibuat dengan bahasa Go?
+
+## DWARF
+
+Format yang dipakai oleh aplikasi Linux mengikuti spesifikasi Executable and Linkable Format (ELF).  Pada dasarnya, sebuah file ELF terdiri atas ELF header yang di-ikuti oleh program header dan section header.  Kode program yang akan di-eksekusi oleh CPU (dalam bahasa mesin) akan ditulis di section `.text`.  Section lainnya selain `.text` biasanya hanya berisi informasi pendukung.
+
+Sebagai contoh DWARF sebagai standar format *debugging* yang paling umum dipakai akan menambahkan informasi section seperti `.debug_info`, `.debug_pubnames`, dan sebagainya (semua yang diawali dengan `.debug_`).  Sebagai informasi, pada proses *building* dengan `go build`, Go secara default akan menambahkan section DWARF tersebut.  Namun bila menggunakan *hex editor*, saya tidak akan menemukan daftar nama file di section DWARF secara langsung karena informasi di DWARF dikompres secara *default* sejak Go 1.11 (dengan tujuan untuk mengurangi ukuran file).
+
+Untuk men-dekompres informasi DWARF, saya dapat memberikan perintah:
+
+```shell
+objcopy --decompress-debug-sections test decompressed-test
+```
+
+Setelah perintah di atas diberikan, saya akan menemukan file `decompressed-test` dengan ukuran yang lebih besar dibanding `test` (2,9M versus 1,8M). Bila saya membuka file ini melalui *hex editor*, saya dapat melihat informasi nama file *source code* dengan mudah.
+
+Bagian paling utama dari informasi *debugging* DWARF berada di section `.debug_info`.  Namun, informasi nomor baris dan nama file untuk sebuah kode program berada di section lain yang bernama `.debug_line`.  Saya bisa menampilkannya dengan menggunakan perintah `objdump` seperti berikut ini:
+
+```shell
+objdump -WL test
+
+### OUTPUT:
+###
+### 
+### test:     file format elf64-x86-64
+### 
+### Contents of the .debug_line section:
+### 
+### <autogenerated>:
+### File name                            Line number    Starting address    View    Stmt
+### 
+### /tmp/go/sdk/go1.19.4/src/io/io.go:
+### io.go                                         29            0x475f60               x
+### io.go                                         29            0x475f6a               x
+### 
+### /tmp/go/sdk/go1.19.4/src/errors/errors.go:
+### errors.go                                     59            0x475f7f        
+### errors.go                                     59            0x475f80               x
+### errors.go                                     59            0x475f85        
+### 
+### /tmp/go/sdk/go1.19.4/src/io/io.go:
+### io.go                                         29            0x475f97               x
+### io.go                                         29            0x475f9e        
+### io.go                                         29            0x475fb7               x
+### io.go                                         29            0x475fbe        
+### 
+### /tmp/go/sdk/go1.19.4/src/errors/errors.go:
+### errors.go                                     59            0x475fc5               x
+### errors.go                                     59            0x475fd1        
+### 
+### /tmp/go/sdk/go1.19.4/src/io/io.go:
+### io.go                                         32            0x475fe3               x
+### io.go                                         32            0x475fea        
+### io.go                                         32            0x476003               x
+### io.go                                         32            0x47600a        
+### 
+### /tmp/go/sdk/go1.19.4/src/errors/errors.go:
+### errors.go                                     59            0x47600f               x
+### errors.go                                     59            0x47601b        
+###
+### ...
+```
+
+Untuk menghilangkan informasi DWARF, pada saat *building*, saya dapat menambahkan argumen `-ldflags="-w"` seperti pada contoh berikut ini:
+
+```shell
+go build -ldflags="-w"
+```
+
+Sekarang, bila saya memberikan perintah `objdump`, saya tidak akan menemukan lagi daftar lokasi *source code* seperti yang terlihat pada hasil eksekusi berikut ini:
+
+```shell
+objdump -WL test
+
+### OUTPUT:
+### 
+### test:     file format elf64-x86-64
+###
+```
+
+Selain itu, ukuran file juga menjadi lebih kecil dari semula (1,3M vs 1,8M).
+
+## Symbol Table
+
+Section berikutnya yang dapat dihilangkan adalah *symbol table* yang berada di `.symtab`.  Bagian ini berisi nama untuk setiap data yang ada.  Untuk melihatnya, saya dapat menggunakan perintah `objdump` seperti berikut ini:
+
+```shell
+objdump -t test
+
+### OUTPUT:
+###
+### ...
+### 0000000000434040 g     F .text	000000000000003a runtime.main.func1
+### 0000000000434080 g     F .text	0000000000000339 runtime.main
+### 00000000004343c0 g     F .text	0000000000000035 runtime.main.func2
+### 00000000004828c0 g     F .text	000000000000005f main.main
+### 00000000005147a0 g     O .noptrdata	0000000000000028 main..inittask
+### 000000000052b1a0 g     O .bss	0000000000000008 runtime.main_init_done
+### 000000000055a12d g     O .noptrbss	0000000000000001 runtime.mainStarted
+### 00000000004b8d90 g     O .rodata	0000000000000008 runtime.mainPC
+### ...
+```
+
+Walaupun tidak mengandung nama file, saya dapat menghilangkannya dengan menggunakan argumen `-ldflags="-s"` seperti pada contoh berikut ini:
+
+```shell
+go build -ldflags="-s"
+```
+
+Hasil akhirnya adalah binary yang lebih kecil (1,2M vs 1,3M).  Selain itu, bila saya memberikan perintah `objdump -t test`, tidak ada lagi informasi *symbol table* yang ditampilkan.
+
+## Go Runtime Symbol Information
+
+Go Runtime Symbol Information adalah fitur khusus Go yang menambahkan section `.gopclntab` dan `.gosymtab` pada file ELF yang dihasilkan.  Bila DWARF dan *symbol table* adalah fitur umum pada ELF, Go Runtime Symbol Information adalah fitur spesifik pada Go.  Fitur ini dipakai oleh *garbage collector* milik Go, menghasilkan *stack trace* yang akurat, dan sebagainya. Dengan demikian, bila sebuah aplikasi mengandung section `.gopclntab` dan `.gosymtab`, maka aplikasi tersebut kemungkinan besar dibuat dari bahasa pemograman Go.
+
+Untuk menampilkan isi `.gopclntab`, saya dapat menggunakan perintah seperti berikut ini:
+
+```shell
+objdump -s -j .gopclntab test
+
+### OUTPUT:
+###
+### test:     file format elf64-x86-64
+### 
+### Contents of section .gopclntab:
+###  4bb060 f0ffffff 00000108 92050000 00000000  ................
+###  4bb070 bb000000 00000000 00104000 00000000  ..........@.....
+###  4bb080 60000000 00000000 40bb0000 00000000  `.......@.......
+###  4bb090 40c30000 00000000 60e90000 00000000  @.......`.......
+###  4bb0a0 c09b0300 00000000 00000000 00000000  ................
+###  4bb0b0 00000000 00000000 00000000 00000000  ................
+###  4bb0c0 696e7465 726e616c 2f637075 2e496e69  internal/cpu.Ini
+###  4bb0d0 7469616c 697a6500 696e7465 726e616c  tialize.internal
+###  4bb0e0 2f637075 2e70726f 63657373 4f707469  /cpu.processOpti
+###  4bb0f0 6f6e7300 696e7465 726e616c 2f637075  ons.internal/cpu
+###  4bb100 2e696e64 65784279 74650069 6e746572  .indexByte.inter
+###  4bb110 6e616c2f 6370752e 646f696e 69740069  nal/cpu.doinit.i
+###  4bb120 6e746572 6e616c2f 6370752e 69735365  nternal/cpu.isSe
+###  4bb130 7400696e 7465726e 616c2f63 70752e63  t.internal/cpu.c
+###  4bb140 70756964 00696e74 65726e61 6c2f6370  puid.internal/cp
+###  4bb150 752e7867 65746276 00696e74 65726e61  u.xgetbv.interna
+###  4bb160 6c2f6370 752e6765 74474f41 4d443634  l/cpu.getGOAMD64
+###  ...
+``` 
+
+Terlihat bahwa `.gopclntab` juga menampung informasi nama file *source code*.  Ini adalah salah satu penyebab mengapa bila saya menjalankan aplikasi `test`, saya masih tetap menjumpai output lokasi file yang akurat walaupun saya sudah menghapus DWARF dan *symbol table* (dengan `-ldflags="-w -s"`).
+
+Kabar buruknya adalah tidak ada flag untuk menghilang section `.gopclntab`.  Dan seandainya saja saya berhasil menghapus `.gopclntab`, berdasarkan informasi dari https://github.com/golang/go/issues/36555, beberapa fitur dari Go yang menggunakan `runtime.Callers` akan berhenti bekerja.  Sebagai gantinya, Go menawarkan `-trimpath` untuk menghapus informasi lokasi folder secara penuh.  Sebagai contoh, saya dapat menggunakan seperti pada perintah berikut ini:
+
+```shell
+go build -ldflags="-w -s" -trimpath
+```
+
+Sekarang, bila saya menjalankan aplikasi, saya akan mendapatkan hasil seperti berikut ini:
+
+```shell
+./test
+
+### OUTPUT:
+###
+### goroutine 1 [running]:
+### runtime/debug.Stack()
+### 	runtime/debug/stack.go:24 +0x65
+### runtime/debug.PrintStack()
+### 	runtime/debug/stack.go:16 +0x19
+### main.main()
+### 	test/main.go:10 +0x3b
+### panic: This error is raised on purpose
+### 
+### goroutine 1 [running]:
+### main.main()
+### 	test/main.go:11 +0x53
+```
+
+Nama file pada hasil sebelumnya `/tmp/test/main.go` kini menjadi lebih singkat seperti `/test/main.go`.  Ini akan membantu mengurangi jumlah informasi yang di-ekspos.
+
+Bila ini tidak cukup, saya juga dapat menerapkan teknik obfuskasi.  Sebagai contoh, saya menambahkan fitur ini di `jch-metadata` yang bisa dijalankan dengan perintah seperti berikut ini:
+
+```shell
+jch-metadata -f test -a clear
+```
+
+Kode program `jch-metadata` akan menggunakan package bawaan `debug/gosym` untuk membaca Go Runtime Symbol Information.  Kode program-nya dapat dilihat di https://github.com/JockiHendry/jch-metadata/blob/bbf5e1ac28ac26aae72e4c10807aebb02fbaa0b7/internal/parser/elf/elf.go.  Sekarang, bila saya menjalankan `test`, saya akan memperoleh hasil seperti berikut ini:
+
+```shell
+./test
+
+### OUTPUT:
+###
+### goroutine 1 [running]:
+### runtime/debug.Stack()
+### 	nvkyjkzjdtunerqsdszxxg:24 +0x65
+### runtime/debug.PrintStack()
+### 	nvkyjkzjdtunerqsdszxxg:16 +0x19
+### main.main()
+### 	ikazoljjewsq:10 +0x3b
+### panic: This error is raised on purpose
+### 
+### goroutine 1 [running]:
+### main.main()
+### 	ikazoljjewsq:11 +0x53
+```
+
+## Build ID
+
+Secara default, aplikasi yang dihasilkan oleh Go akan memiliki sebuah section dengan nama `.note.go.buildid`.  Saya dapat melihat isinya dengan memberikan perintah seperti berikut ini:
+
+```shell
+objdump -s -j .note.go.buildid test
+
+### OUTPUT:
+###
+### 
+### test:     file format elf64-x86-64
+### 
+### Contents of section .note.go.buildid:
+###  400f9c 04000000 53000000 04000000 476f0000  ....S.......Go..
+###  400fac 50653536 65366b50 306b4173 7664306b  Pe56e6kP0kAsvd0k
+###  400fbc 56777a6d 2f505076 4f553977 7461354d  Vwzm/PPvOU9wta5M
+###  400fcc 78487971 54527556 572f4837 2d635f4f  xHyqTRuVW/H7-c_O
+###  400fdc 5537456b 34514542 49634c48 47312f6e  U7Ek4QEBIcLHG1/n
+###  400fec 476c5141 67474661 54525f43 69574648  GlQAgGFaTR_CiWFH
+###  400ffc 50384100                             P8A. 
+```
+
+Selain itu, saya juga dapat melihat nilai yang sama dengan menggunakan perintah `go tool` seperti berikut ini:
+
+```shell
+go tool buildid test
+
+### OUTPUT:
+### Pe56e6kP0kAsvd0kVwzm/PPvOU9wta5MxHyqTRuVW/H7-c_OU7Ek4QEBIcLHG1/nGlQAgGFaTR_CiWFHP8A
+```
+
+Setiap kali saya men-*compile* kode program yang sama, saya akan memperoleh build ID yang sama.  Namun bukan hanya itu saja.  Bila seandainya salah satu dari *build tool* yang saya pakai berubah, misalnya versi Go yang berbeda, biarpun kode program-nya sama, aplikasi yang dihasilkan akan memiliki build ID yang berbeda.
+
+Sama seperti `.gopclntab`, tidak ada flag dari Go untuk menghapus section `.note.go.buildid`.  Bila saya menggunakan `jch-metadata -f test -a clear` seperti di bagian sebelumnya, nilai Build ID akan itu di-acak.
+
+## Build Info
+
+Aplikasi yang dibuat dengan Go juga memiliki section dengan nama `.go.buildinfo`.  Section ini berisi informasi seperti versi Go dan flag yang dipakai saat melakukan *building*.  Selain itu, bila kode program yang di-*build* dikelola oleh VSC seperti Git, nilai hash Git yang aktif saat melakukan *building* juga akan turut disimpan di section ini.  Sebagai contoh, saya dapat melihat isi section ini dengan menggunakan perintah seperti berikut ini:
+
+```shell
+objdump -s -j .go.buildinfo test
+
+### OUTPUT:
+###
+### test:     file format elf64-x86-64
+### 
+### Contents of section .go.buildinfo:
+###  512000 ff20476f 20627569 6c64696e 663a0802  . Go buildinf:..
+###  512010 00000000 00000000 00000000 00000000  ................
+###  512020 08676f31 2e31392e 34b30230 77af0c92  .go1.19.4..0w...
+###  512030 74080241 e1c107e6 d618e670 61746809  t..A.......path.
+###  512040 74657374 0a6d6f64 09746573 74092864  test.mod.test.(d
+###  512050 6576656c 29090a62 75696c64 092d636f  evel)..build.-co
+###  512060 6d70696c 65723d67 630a6275 696c6409  mpiler=gc.build.
+###  512070 2d747269 6d706174 683d7472 75650a62  -trimpath=true.b
+###  512080 75696c64 0943474f 5f454e41 424c4544  uild.CGO_ENABLED
+###  512090 3d310a62 75696c64 09474f41 5243483d  =1.build.GOARCH=
+###  5120a0 616d6436 340a6275 696c6409 474f4f53  amd64.build.GOOS
+###  5120b0 3d6c696e 75780a62 75696c64 09474f41  =linux.build.GOA
+###  5120c0 4d443634 3d76310a 6275696c 64097663  MD64=v1.build.vc
+###  5120d0 733d6769 740a6275 696c6409 7663732e  s=git.build.vcs.
+###  5120e0 72657669 73696f6e 3d326439 33613762  revision=2d93a7b
+###  5120f0 33363034 36636132 64363966 65396232  36046ca2d69fe9b2
+###  512100 66363964 37646436 64653166 38663463  f69d7dd6de1f8f4c
+###  512110 380a6275 696c6409 7663732e 74696d65  8.build.vcs.time
+###  512120 3d323032 342d3036 2d323854 30393a34  =2024-06-28T09:4
+###  512130 353a3038 5a0a6275 696c6409 7663732e  5:08Z.build.vcs.
+###  512140 6d6f6469 66696564 3d747275 650af932  modified=true..2
+###  512150 43318618 20720082 42104116 d8f20000  C1.. r..B.A.....
+```
+
+Data yang ada di section `.go.buildinfo` ini dapat dibaca di aplikasi melalui package `runtime/debug` seperti pada contoh berikut ini:
+
+```go
+func main() {	
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		fmt.Println("Gagal membaca build info!")
+	}
+	versi := "(tidak jelas)"
+	tanggal := "(tidak jelas)"
+	for _, v := range info.Settings {
+		if v.Key == "vcs.revision" {
+			versi = v.Value
+		} else if v.Key == "vcs.time" {
+			tanggal = v.Value
+		}
+	}
+	fmt.Printf("Versi aplikasi: %s\n", versi)
+	fmt.Printf("Dibuat pada tanggal: %s\n", tanggal)
+}
+
+// OUTPUT:
+//
+// Versi aplikasi: 2d93a7b36046ca2d69fe9b2f69d7dd6de1f8f4c8
+// Dibuat pada tanggal: 2024-06-28T09:45:08Z
+```
+
+Sama seperti section `.go` lainnya, saya tidak menemukan fitur bawaan Go untuk tidak menyertakan section ini di aplikasi yang dihasilkan.  Namun, bila tidak ingin menyertakan informasi VCS di Build Info, saya dapat menambahkan flag `-buildvcs=false` seperti pada contoh berikut ini:
+
+```shell
+go build -ldflags="-w -s" -trimpath -buildvcs=false
+
+./test
+
+## OUTPUT:
+##
+## Versi aplikasi: (tidak jelas)
+## Dibuat pada tanggal: (tidak jelas)
+```
