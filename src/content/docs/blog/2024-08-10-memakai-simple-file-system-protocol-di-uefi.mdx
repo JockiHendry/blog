@@ -1,0 +1,307 @@
+---
+title: Memakai Simple File System Protocol di UEFI
+date: 2024-08-10
+tags: [UEFI]
+excerpt: Pada UEFI, setiap layanan yang disediakan dikelompokkan dalam apa yang disebut sebagai *protocol*.  Untuk membaca dan menulis file pada partisi dengan *file system* yang didukung oleh UEFI, saya dapat menggunakan Simple File System Protocol.  Bila partisi menggunakan *file system* yang tidak didukung secara bawaan atau saya ingin mengakses sektor (bukan dalam abstraksi file), saya dapat menggunakan Disk I/O Protocol.  Bila ingin sesuatu yang lebih *low level* lagi, terdapat ATA Pass Thru Protocol untuk memberikan perintah ATA langsung ke perangkat keras media penyimpanan.  Pada tulisan ini saya akan mencoba mengakses partisi dengan menggunakan Simple File System Protocol...
+---
+
+Pada UEFI, setiap layanan yang disediakan dikelompokkan dalam apa yang disebut sebagai *protocol*.  Untuk membaca dan menulis file pada partisi dengan *file system* yang didukung oleh UEFI, saya dapat menggunakan Simple File System Protocol.  Bila partisi menggunakan *file system* yang tidak didukung secara bawaan atau saya ingin mengakses sektor (bukan dalam abstraksi file), saya dapat menggunakan Disk I/O Protocol.  Bila ingin sesuatu yang lebih *low level* lagi, terdapat ATA Pass Thru Protocol untuk memberikan perintah ATA langsung ke perangkat keras media penyimpanan.  Pada tulisan ini saya akan mencoba mengakses partisi dengan menggunakan Simple File System Protocol.
+
+## File System
+
+Secara fisik, media penyimpanan sebenarnya hanya mendukung akses seperti LBA dalam bentuk sektor.  Sektor pertama diakses dengan LBA 0, sektor kedua diakses lewat LBA 1, dan seterusnya.  Sistem operasi menggunakan *file system* untuk melakukan translasi konsep yang lebih mudah dimengerti seperti *file*, *folder* dan *permission* ke alamat LBA.  Pengguna sistem operasi tidak perlu tahu konsep *sector* atau alamat LBA untuk menyimpan atau membaca *file* karena data dikelompokkan berdasarkan nama yang mudah dimengerti.
+
+Sistem operasi Windows menggunakan *file sytem* NTFS dan FAT32.  Sementara itu, sistem operasi Linux menggunakan *file system* ext4.  Masing-masing *file system* memiliki kelebihan dan kekurangannya.  Sebagai contoh, FAT32 merupakan *file system* yang paling mudah dibuat implementasinya.  FAT dibuat oleh Bill Gates yang terkenal dengan kutipan *"I wrote FAT on an airplane"*.  NTFS dan ext4 menawarkan fitur yang lebih banyak dibandingkan FAT seperti dukungan ukuran file yang lebih besar, *permission*, dan sebagainya.
+
+Pada era BIOS, pembuat *bootstrap loader* harus mencari cara untuk membaca file dari media penyimpanan dengan menyertakan kode *file system* yang minimal.  UEFI membuat hal ini lebih sederhana dengan menyediakan dukungan *file system* FAT (FAT12, FAT16, dan FAT32) secara bawaan.  Kode program yang ingin membaca dan menulis file di partisi dengan *file system* FAT cukup memanggil Simple File System Protocol yang disediakan oleh UEFI.
+
+:::note
+Walaupun spesifikasi UEFI hanya mewajibkan dukungan *file system* FAT12, FAT16 dan FAT32 secara bawaan, saya menemukan bahwa UEFI pada motherboard PC yang saya juga mendukung *file system* NTFS secara bawaan.  Walaupun demikian, dukungannya hanya baca saja (*read only*) sehingga kode program yang menulis atau mengubah file di partisi NTFS akan gagal.
+:::
+
+## Mendapatkan Daftar Partisi
+
+Karena setiap PC bisa memiliki jumlah perangkat penyimpan dan partisi yang berbeda, langkah pertama yang perlu saya lakukan adalah mendapatkan daftar Simple File System Protocol yang tersedia.  Untuk itu, saya dapat menggunakan `LocateHandleBuffer()` dari *boot service*.  EDK2 sudah menyediakan variabel global `gBS` untuk *boot service* dan `gRT` untuk *runtime service*.  Saya hanya perlu menyertakan header `Library/UefiBootServicesTableLib.h`.  Sebagai latihan, saya akan memanggil `LocateHandleBuffer()` seperti pada contoh kode program berikut ini:
+
+```c title="SimpleFileSystem.c"
+#include <Uefi.h>
+#include <Library/UefiLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+
+EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable) {
+    EFI_STATUS Status;
+    UINTN HandlesSize;
+    EFI_HANDLE* Handles = NULL;
+
+    Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &HandlesSize, &Handles);
+    if (EFI_ERROR(Status)) {
+        Print(L"Gagal mencari handle untuk Simple File System Protocol: %r\n", Status);
+        return EFI_LOAD_ERROR;
+    }
+    Print(L"Menenemukan %d partisi yang didukung\n", HandlesSize);
+
+    return EFI_SUCCESS;
+}
+```
+
+Kode program di atas menggunakan *boot service* `LocateHandleBuffer` untuk mendapatkan daftar *handle* untuk *protocol* tertentu dalam bentuk array.  Metode pencarian yang dipakai adalah `ByProtocol` untuk mencari seluruh *handle* untuk protokol `gEfiSimpleFileSystemProtocolGuid` (Simple File System Protoocol).  Bila pada PC terdapat dua hardisk dimana masing-masing harddisk memiliki satu partisi yang didukung oleh UEFI, maka kode program di atas akan mendapatkan 2 *handle* ke Simple File System Protocol.
+
+Walaupun kode program di atas bisa dijalankan tanpa kesalahan, pada EDK2, bila sebuah komponen menggunakan *protocol*, sebaiknya *protocol* yang dipakai ditambahkan pada file INF di bagian `[Protocols]` untuk mempermudah deteksi kesalahan.  Sebagai contoh, karena kode program di atas memakai Simple File System Protocol, saya akan menambahkan baris berikut ini pada file INF:
+
+```text title="SimpleFileSystem.inf"
+...
+[Protocols]
+    gEfiSimpleFileSystemProtocolGuid
+```
+
+Setelah mendapatkan *handle* dengan `LocateHandleBuffer`, langkah berikutnya adalah menggunakan `HandleProtocol` untuk mendapatkan *interface* yang bisa digunakan untuk mengakses *protocol*.  Sebagai contoh, saya akan menambahkan kode program berikut ini:
+
+```c title="SimpleFileSystem.c" {11,18-25}
+#include <Uefi.h>
+#include <Library/UefiLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+
+EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable) {
+    EFI_STATUS Status;
+    UINTN HandlesSize;
+    EFI_HANDLE* Handles = NULL;
+    UINTN Index;
+
+    Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &HandlesSize, &Handles);
+    if (EFI_ERROR(Status)) {
+        Print(L"Gagal mencari handle untuk Simple File System Protocol: %r\n", Status);
+        return EFI_LOAD_ERROR;
+    }
+
+    Print(L"Menenemukan %d partisi yang didukung\n", HandlesSize);
+    for(Index = 0; Index < HandlesSize; Index++) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* SimpleFileSystem = NULL;
+        Status = gBS->HandleProtocol(Handles[Index], &gEfiSimpleFileSystemProtocolGuid, (void**) &SimpleFileSystem);
+        if (EFI_ERROR(Status)) {
+            Print(L"Gagal mendapatkan protokol untuk handle %d: %r\n", Index, Status);
+            continue;
+        }
+    }
+
+    return EFI_SUCCESS;
+}
+```
+
+Sekarang, saya sudah mendapatkan sebuah `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` untuk setiap partisi di media penyimpanan yang ada di PC.  Berdasarkan dokumentasi UEFI, Simple File System Protocol hanya memiliki sebuah function dengan nama `OpenVolume`.  Saya dapat menggunakan function ini untuk mendapatkan sebuah *interface* ke `EFI_FILE_PROTOCOL`.  Sebagai contoh, saya akan menambahkan program berikut ini:
+
+```c title="SimpleFileSystem.c" {5-13,35}
+#include <Uefi.h>
+#include <Library/UefiLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+
+static VOID InspectVolume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* SimpleFileSystem) {
+    EFI_FILE_PROTOCOL* Root = NULL;
+    EFI_STATUS Status;        
+    Status = SimpleFileSystem->OpenVolume(SimpleFileSystem, &Root);
+    if (EFI_ERROR(Status)) {
+        Print(L"Gagal membuka volume: %r\n", Status);
+        return;
+    }
+}
+
+EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable) {
+    EFI_STATUS Status;
+    UINTN HandlesSize;
+    EFI_HANDLE* Handles = NULL;
+    UINTN Index;
+
+    Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &HandlesSize, &Handles);
+    if (EFI_ERROR(Status)) {
+        Print(L"Gagal mencari handle untuk Simple File System Protocol: %r\n", Status);
+        return EFI_LOAD_ERROR;
+    }
+
+    Print(L"Menenemukan %d partisi yang didukung\n", HandlesSize);
+    for(Index = 0; Index < HandlesSize; Index++) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* SimpleFileSystem = NULL;
+        Status = gBS->HandleProtocol(Handles[Index], &gEfiSimpleFileSystemProtocolGuid, (void**) &SimpleFileSystem);
+        if (EFI_ERROR(Status)) {
+            Print(L"Gagal mendapatkan protokol untuk handle %d: %r\n", Index, Status);
+            continue;
+        }
+        InspectVolume(SimpleFileSystem);
+    }
+    
+    return EFI_SUCCESS;
+}
+```
+
+Pada kode program di atas, saya mendapatkan `EFI_FILE_PROTOCOL` dengan nama `Root`.  Selanjutnya, saya bisa menggunakan `Root` untuk mendapatkan `EFI_FILE_PROTOCOL` lain yang mewakili *file* dan *folder* yang akan dipakai.  Saya kemudian bisa melakukan operasi pada `EFI_FILE_PROTOCOL` tersebut seperti membaca, membuat dan menghapus file.
+
+## Melihat Informasi Partisi
+
+Khusus untuk `Root`, saya dapat memanggil `GetInfo()` untuk mendapatkan informasi *file system* seperti label partisi, ukuran partisi dan ruang kosong pada partisi.  Untuk itu, saya bisa membuat kode program seperti berikut ini:
+
+```c title="SimpleFileSystem.c" {16-32}
+#include <Uefi.h>
+#include <Library/UefiLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+#include <Library/MemoryAllocationLib.h>
+#include <Guid/FileSystemInfo.h>
+
+static VOID InspectVolume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* SimpleFileSystem) {
+    EFI_FILE_PROTOCOL* Root = NULL;
+    EFI_STATUS Status;    
+    Status = SimpleFileSystem->OpenVolume(SimpleFileSystem, &Root);
+    if (EFI_ERROR(Status)) {
+        Print(L"Gagal membuka volume: %r\n", Status);
+        return;
+    }
+
+    EFI_FILE_SYSTEM_INFO* FileSystemInfo = NULL;
+    UINTN FileSystemInfoSize = 1024;
+    FileSystemInfo = (EFI_FILE_SYSTEM_INFO*) AllocateZeroPool(FileSystemInfoSize);
+    Status = Root->GetInfo(Root, &gEfiFileSystemInfoGuid, &FileSystemInfoSize, FileSystemInfo);
+    if (EFI_ERROR(Status)) {
+        Print(L"Gagal mendapatkan informasi partisi: %r\n", Status);
+        goto Exit;
+    }
+    Print(L"Volume Label    : %s\n", FileSystemInfo->VolumeLabel);
+    Print(L"Volume Size (GB): %d\n", FileSystemInfo->VolumeSize / (1024 * 1024 * 1024));
+    Print(L"Free Space (GB) : %d\n", FileSystemInfo->FreeSpace / (1024 * 1024 * 1024));
+    Print(L"\n");
+
+Exit:
+    if (FileSystemInfo != NULL) {
+        FreePool(FileSystemInfo);
+    }
+}
+...
+```
+
+Sama seperti *protocol* yang didefinisikan di file EFI, saya juga perlu menambahkan setiap GUID yang saya pakai ke file INF.  Sebagai contoh, karena kode program di atas menggunakan `gEfiFileSystemInfoGuid`, saya akan menambahkan baris berikut ini pada file INF:
+
+```text title="SimpleFileSystem.inf"
+....
+[Guids]
+    gEfiFileSystemInfoGuid
+```
+
+## Membuat File Baru
+
+Untuk membuat file baru, saya dapat menggunakan function `Open()` untuk mendapatkan `EFI_FILE_PROTOCOL` baru dengan nama dan lokasi sesuai dengan yang telah ditentukan.  Setelah itu, saya akan menggunakan function `Write()` untuk menulis isi file dan tidak lupa memanggil `Close()` untuk menyimpan perubahan.  Sebagai contoh, saya akan membuat kode program seperti berikut ini:
+
+```c title="SimpleFileSystem.c"
+...
+EFI_FILE_PROTOCOL* ReadmeFile = NULL;
+CHAR8* Content = "File ini dibuat langsung dari UEFI tanpa lewat OS!\n";
+UINTN ContentSize = AsciiStrLen(Content);
+Status = Root->Open(
+        Root,
+        &ReadmeFile,
+        L"readme.txt",
+        EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+        0
+);
+if (EFI_ERROR(Status)) {
+    Print(L"Gagal membuat file: %r\n", Status);
+    goto Exit;
+}
+Status = ReadmeFile->Write(ReadmeFile, &ContentSize, (CHAR8*) Content);
+if (EFI_ERROR(Status)) {
+    Print(L"Gagal menulis ke file: %r\n", Status);
+    ReadmeFile->Close(ReadmeFile);
+    goto Exit;
+}
+ReadmeFile->Close(ReadmeFile);
+...
+```
+
+Kode program di atas akan membuat sebuah file baru di partisi dengan nama `readme.txt` dengan isi seperti `File ini dibuat langsung dari UEFI tanpa lewat OS!`.  Untuk menulis isi file per byte dalam bentuk ASCII sehingga lebih mudah ditampilkan oleh teks editor, saya menggunakan `CHAR8*` dan bukan `CHAR16*` seperti biasanya yang dipakai di UEFI.  Library string yang disediakan oleh EDK2 seperti `StrLen()` mengharapkan input dalam bentuk `CHAR16*`.  Bila ingin bekerja dengan `CHAR8*`, saya perlu menggunakan function yang diawali dengan `Ascii` seperti `AsciiStrLen()`.
+
+Untuk kode yang lebih singkat, saya juga dapat menggunakan library `FileHandleLib` yang telah disediakan oleh EDK2.  Namun sebelumnya, saya perlu menambahkan baris berikut ini pada file DSC:
+
+```text title="MyAppPkg.dsc"
+[LibraryClasses]
+  ...
+  FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
+```
+
+Saya juga perlu menambahkan baris ini pada file INF untuk aplikasi:
+
+```text title="SimpleFileSystem.inf"
+[LibraryClasses]
+  ...
+  FileHandleLib
+```
+
+Sekarang, saya dapat mengubah kode program menjadi seperti berikut ini:
+
+```c title="SimpleFileSystem.c"
+...
+EFI_FILE_PROTOCOL* ReadmeFile = NULL;
+Status = Root->Open(
+        Root,
+        &ReadmeFile,
+        L"readme.txt",
+        EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+        0
+);
+if (EFI_ERROR(Status)) {
+    Print(L"Gagal membuat file: %r\n", Status);
+    goto Exit;
+}
+Status = FileHandlePrintLine(ReadmeFile, L"File ini dibuat langsung dari UEFI tanpa lewat OS!");
+if (EFI_ERROR(Status)) {
+    Print(L"Gagal menulis ke file: %r\n", Status);
+    FileHandleClose(ReadmeFile);
+    goto Exit;
+}
+FileHandleClose(ReadmeFile);
+...
+```
+
+## Membaca File
+
+Masih memakai `FileHandleLib`, bila ingin membaca satu baris dari sebuah file, saya dapat menggunakan `FileHandleReadLine()` atau `FileHandleReturnLine()`.  Sebagai contoh, kode program berikut ini akan mencoba membaca file `\ProgramData\Microsoft\Diagnosis\osver.txt` yang berisi informasi versi Windows dan mencetaknya ke layar bila file tersebut ada:
+
+```c title="SimpleFileSystem.c"
+EFI_FILE_PROTOCOL* OsVerFile = NULL;
+CHAR16* WindowsVersion = NULL;
+BOOLEAN Ascii = 1;
+Status = Root->Open(
+        Root,
+        &OsVerFile,
+        L"\\ProgramData\\Microsoft\\Diagnosis\\osver.txt",
+        EFI_FILE_MODE_READ,
+        0
+);
+if (Status == EFI_SUCCESS) {
+    WindowsVersion = FileHandleReturnLine(OsVerFile, &Ascii);
+    if (WindowsVersion != NULL) {
+        Print(L"Versi Windows: %s\n", WindowsVersion);
+    }
+    FileHandleClose(OsVerFile);
+}
+```
+
+`FileHandleReturnLine()` akan membaca sebuah baris dari file dan mengembalikannya dalam bentuk string `CHAR16*`.  Walaupun kode program di atas berjalan dengan lancar di emulator, saya menemukan bahwa pada PC dengan driver NTFS bawaan, kode program di atas hanya mencetak satu krakter saja.  Implementasi `FileHandleReturnLine()` akan membaca file dengan `FileHandleRead()` berulang kali (per karakter). Sementara itu, perilaku posisi file tidak sesuai dengan yang diharapkan saat file dibaca berulang kali, bahkan menyebabkan kesalahan bila `FileHandleRead()` dipanggil kembali walaupun belum mencapai EOF.  Untuk mengatasinya, saya dapat membaca file hanya sekali saja, misalnya dengan menggunakan kode program seperti berikut ini:
+
+```c title="SimpleFileSystem.c"
+EFI_FILE_PROTOCOL* OsVerFile = NULL;
+CHAR16* WindowsVersion = NULL;
+Status = Root->Open(
+        Root,
+        &OsVerFile,
+        L"\\ProgramData\\Microsoft\\Diagnosis\\osver.txt",
+        EFI_FILE_MODE_READ,
+        0
+);
+if (Status == EFI_SUCCESS) {
+    UINTN BufferSize = 50;
+    CHAR8* Buffer = AllocateZeroPool(50);
+    Status = FileHandleRead(OsVerFile, &BufferSize, Buffer);
+    if (Status == EFI_SUCCESS) {
+        Print(L"Versi Windows: %a\n", Buffer);
+    } else {
+        Print(L"Gagal membaca file versi Windows: %r\n", Status);
+    }
+    FreePool(Buffer);
+    FileHandleClose(OsVerFile);
+}
+```
