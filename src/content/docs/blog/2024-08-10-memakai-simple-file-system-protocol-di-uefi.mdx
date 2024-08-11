@@ -1,7 +1,7 @@
 ---
 title: Memakai Simple File System Protocol di UEFI
 date: 2024-08-10
-tags: [UEFI]
+tags: [UEFI, C]
 excerpt: Pada UEFI, setiap layanan yang disediakan dikelompokkan dalam apa yang disebut sebagai *protocol*.  Untuk membaca dan menulis file pada partisi dengan *file system* yang didukung oleh UEFI, saya dapat menggunakan Simple File System Protocol.  Bila partisi menggunakan *file system* yang tidak didukung secara bawaan atau saya ingin mengakses sektor (bukan dalam abstraksi file), saya dapat menggunakan Disk I/O Protocol.  Bila ingin sesuatu yang lebih *low level* lagi, terdapat ATA Pass Thru Protocol untuk memberikan perintah ATA langsung ke perangkat keras media penyimpanan.  Pada tulisan ini saya akan mencoba mengakses partisi dengan menggunakan Simple File System Protocol...
 ---
 
