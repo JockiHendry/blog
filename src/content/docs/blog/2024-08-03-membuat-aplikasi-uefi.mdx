@@ -1,7 +1,7 @@
 ---
 title: Membuat Aplikasi UEFI Dengan EDK2
 date: 2024-08-03
-tags: [UEFI]
+tags: [UEFI, C]
 excerpt: Bila kode program *bootstrap loader* era BIOS biasanya di-simpan di sektor pertama yang disebut Master Boot Record (MBR), kode program *bootstrap loader* di UEFI disimpan dalam bentuk file EFI di sebuah partisi FAT32 dengan nama seperti `BOOTX64.EFI`.  File EFI ini disimpan dalam format Portable Executable (PE) sama seperti yang dipakai oleh file EXE di sistem operasi Windows.  Selain itu, kebanyakan motherboard PC juga dilengkapi dengan UEFI Shell yang memungkinkan pengguna untuk menjalankan file EFI secara interaktif saat komputer dinyalakan (sebelum sistem operasi dikerjakan).  Pada tulisan ini, saya akan mencoba membuat aplikasi EFI sederhana yang dapat dijalankan dari UEFI Shell...
 ---
 
