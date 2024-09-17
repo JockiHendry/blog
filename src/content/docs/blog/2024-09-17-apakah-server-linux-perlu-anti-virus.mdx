@@ -1,0 +1,50 @@
+---
+title: Apakah Server Linux Perlu Antivirus?
+date: 2024-09-17
+tags: [Ubuntu]
+excerpt: Salah satu pertanyaaan yang sering saya alami adalah apakah harus menginstall antivirus pada server Linux seperti Ubuntu?  Saya akan membatasi definisi server Linux disini sebagai *application server* atau *database server* yang tidak dipakai secara interaktif (bukan server yang dipakai untuk login sehari-hari seperti *bastion server*).  Apa yang harus dipertimbangkan oleh *policy maker* di sebuah organisasi sebelum membuat *policy* terkait pertanyaan ini?
+tableOfContents: false
+---
+
+Salah satu pertanyaaan yang sering saya alami adalah apakah harus menginstall antivirus pada server Linux seperti Ubuntu?  Saya akan membatasi definisi server Linux disini sebagai *application server* atau *database server* yang tidak dipakai secara interaktif (bukan server yang dipakai untuk login sehari-hari seperti *bastion server*).  Apa yang harus dipertimbangkan oleh *policy maker* di sebuah organisasi sebelum membuat *policy* terkait pertanyaan ini?
+
+> ... the only thing worse than being penetrated is being penetrated and not knowing about it...
+
+Berdasarkan kutipan di atas, *detection* merupakan hal penting.  Setidaknya bila organisasi tidak berhasil mempertahankan sistem dari serangan cyber, *detection* yang tepat akan memberi tahu hal buruk telah terjadi.  Oleh sebab itu, setiap server kritis termasuk *application server* dan *database server* harus memiliki *detection*.
+
+Secara garis besar, ada dua jenis kategori *tool* untuk *detection*:
+
+1. Deteksi berdasarkan *signature*.  Pada metode ini, *tool* akan mencari file atau program berdasarkan database malware yang ia miliki.  Kelemahan metode ini adalah ia hanya bisa mendeteksi *malware* yang sudah dikenali sebelumnya (yang sudah ada di dalam database-nya).  Metode ini akan sulit mendeteksi *zero-day exploit*.
+2. Deteksi berdasarkan *behavior* (perilaku).   Pada metode ini, bila sistem memiliki perilaku tidak seperti yang seharusnya, maka sesuatu yang buruk mungkin telah terjadi.  Sebagai contoh, *behavior* yang dideteksi bisa berupa upaya login ke server lain disekitarnya, penggunaan disk yang tidak wajar, dan sebagainya.  Karena tidak terbatas pada file dan proses, metode ini bisa mendeteksi serangan seperti *Living of the Land* (LOTL), *internal threat actor*, dan sebagainya.  Kelemahan metode ini adalah banyak *false positives* karena metode ini kadang sulit membedakan antara perilaku buruk dari *hacker*, *malware* dan pengguna yang sah.
+
+Antivirus termasuk pada kategori *tool* yang melakukan deteksi berdasarkan *signature*.  Sebagai contoh, ClamAV adalah antivirus Linux yang populer.  ClamAV melakukan deteksi berdasarkan [*signature* dalam bentuk *hash*, *regex* atau YARA](https://docs.clamav.net/manual/Signatures.html).  Antivirus biasanya secara periodik akan men-*scan* file di *server* sehingga menimbulkan beban kinerja tersendiri.  Selain itu, bila file yang dibutuhkan oleh aplikasi/database sedang dibaca oleh antivirus, aplikasi/database bisa jadi gagal menulis ke file yang bisa menyebabkan ia tiba-tiba lambat atau gagal hanya pada saat tersebut.
+
+Salah satu kelebihan antivirus adalah deteksinya yang lumayan akurat sehingga proses remediasi bisa dilakukan secara langsung dengan menghapus file bersangkutan.  Namun, kadang false positives tidak dapat dihindari.  Bagaimana bila data yang disimpan oleh *database server* secara tidak sengaja cocok dengan *signature* antivirus?  Bagaimana file salah satu file JAR di *application server* terdeteksi sebagai virus?  Menghapus file yang salah secara otomatis dapat menyebabkan database *corrupt* dan aplikasi error!
+
+Walaupun tidak spesifik untuk Linux, Microsoft memiliki [artikel yang berisi rekomendasi konfigurasi antivirus untuk dipakai bersama SQL Server](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/security/antivirus-and-sql-server).  Artikel tersebut merekomendasikan untuk men-*exclude* proses milik database dari antivirus. Begitu juga dengan file milik database termasuk folder *temporary* milik database disarankan untuk tidak di-*scan* oleh antivirus.
+
+Apakah antivirus layak dipertahankan bila dibandingkan dengan seberapa statis kondisi file di *database server* atau *application server*?  Setelah aplikasi di-*deploy* di *server*, tidak akan ada banyak perubahan file karena programmer tidak akan menyentuh *production server* sehari-hari.  Proses *deployment* pun biasanya dilakukan secara otomatis oleh tool CI/CD.  Bila tidak ada proses *deployment* atau *update* sistem operasi yang berlangsung dan tiba-tiba ada banyak file baru yang muncul, boleh dibilang ini adalah indikator untuk memulai investigasi (tidak ada peran antivirus disini!).
+
+Sementara itu, karena *database server* dan *application server* hanya membuka *port* layanan mereka untuk di-akses *server* lain, maka *attack surface*-nya sangat terbatas.  Bila SSH sudah ditutup, kemungkinan besar *exploit* datang-nya hanya dari *port* seperti `3306` untuk MySQL dan `80` untuk web server.  Dengan konfigurasi yang tepat, database atau aplikasi hanya jalan di user dengan hak akses yang sangat terbatas.  Bila terdapat *exploit*, kemungkinan besar yang dihinggapi adalah proses milik database atau aplikasi.  *Exploit* yang berhasil menulis file biasanya hanya bisa menulis di folder *temporary* (kecuali *exploit* bisa dijalankan sebagai user lain atau *root*).   Namun bila mengikuti rekomendasi di atas, karena proses dan file milik database di-*exclude* (termasuk folder *temporary*), maka *exploit* seperti ini tidak akan terdeteksi oleh antivirus!
+
+Berdasarkan kondisi di atas, saya merasa bahwa peran antivirus sangat minimal di server Linux.  Sebagai gantinya, *tool* yang lebih tepat dipakai adalah *tool* yang melakukan deteksi berdasarkan *behavior* seperti Endpoint Detection and Response (EDR) dan Security Information and Event Management (SIEM).  Pada sistem operasi Linux, EDR biasanya menggunakan eBPF atau audit log untuk menganalisa *behavior*.  Karena eBPF memang di-optimal-kan untuk *monitoring*, dampaknya akan lebih sedikit dibandingkan dengan antivirus yang men-*scan* setiap operasi baca tulis ke file.
+
+:::note
+EDR pada umumnya juga memiliki komponen yang disebut File Integrity Monitoring (FIM).  Berbeda dengan antivirus yang membandingkan setiap file dengan *signature* virus, FIM memiliki tujuan untuk mendeteksi apakah file telah di-modifikasi (misalnya dengan melakukan kalkulasi *hash* pada file tersebut).
+:::
+
+Kelebihan lain penggunaan EDR dibandingkan antivirus adalah:
+
+* Antivirus hanya mendeteksi *malware* (seperti *virus*) sementara EDR mampu mendeteksi aktifitas berbahaya yang bukan hanya datang dari *virus* (misalnya dari *internal threat actor*).
+* Antivirus pada umumnya akurat mendeteksi dan membersihkan *malware*.  Bila terjadi insiden di kemudian hari dan antivirus tidak mendeteksi *malware* di *server* selama sebulan terakhir, apakah *server* memang aman?  Belum tentu!  Namun, log EDR selama sebulan terakhir dapat memberikan kesimpulan apakah *server* berperilaku aneh dan terlibat dalam insiden keamanan tersebut atau tidak.
+
+Bila seandainya penggunaan EDR gratis seperti Elastic Security dan Wazuh masih tidak memungkinkan, server Linux relatif aman dijalankan tanpa antivirus asalkan sudah melakukan *hardening* seperti konfigurasi firewall secara tepat, update secara berkala, mematikan service yang tidak dibutuh dan sebagainya.  Bila server Linux ini adalah node Kubernetes, *container runtime security* seperti [Tracee](https://github.com/aquasecurity/tracee) yang dijalankan sebagai DaemonSet tanpa di-*install* pada server secara langsung juga merupakan alternatif yang baik untuk *detection*.
+
+Lalu, bagaimana penggunaan antivirus bila dilihat dari sisi *compliance*?  Sebagai contoh, PCI DSS memiliki Requirement 5.2.3 dengan isi seperti berikut ini:
+
+> Any system components that are not at risk for malware are evaluated periodically to include the following:
+> * A documented list of all system components not at risk for malware.
+> * Identification and evaluation of evolving malware threats for those system components.
+> * Confirmation whether such system components continue to not require anti-malware protection.
+
+Item di-atas memungkinkan organisasi untuk mendeklarasikan *server* Linux yang tidak memiliki antivirus sebagai *"not commonly affected by malicious software"* dengan syarat evaluasi periodik dilakukan untuk memastikan bahwa antivirus masih tetap tidak dibutuhkan.  Ini adalah kesempatan bagi organisasi untuk mempertimbangkan *cost-benefit tradeoffs* penggunaan antivirus.
