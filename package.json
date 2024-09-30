@@ -5,10 +5,11 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro check && astro build",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && astro build",
     "build-staging": "astro check && MODE=staging astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "test": "vitest"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.3",
@@ -32,6 +33,9 @@
     "workbox-precaching": "^7.1.0",
     "workbox-routing": "^7.1.0",
     "workbox-strategies": "^7.1.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.1"
   },
   "directories": {
     "serve": "dist"
