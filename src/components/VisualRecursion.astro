@@ -21,7 +21,7 @@
                     </svg>                        
                 </button>
                 <div class="relative" style="margin-top: 0px !important;">                    
-                    <div id="codeTemplateMenu" class="transform opacity-0 scale-95 transition ease-out duration-100 absolute 
+                    <div id="codeTemplateMenu" class="hidden transform opacity-0 scale-95 transition ease-out duration-100 absolute
                         right-0 z-10 mt-1 w-56 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 
                         focus:outline-none" role="menu" tabindex="-1">
                         <div class="py-1" role="none">                              
@@ -45,7 +45,14 @@
                                          inline-flex flex-initial border border-gray-500">
                 Clear Output
             </button>
-        </div>    
+        </div>
+        <link rel="stylesheet" data-name="vs/editor/editor.main" href="/vs/editor/editor.main.css" />
+        <script is:inline>
+            // @ts-ignore
+            var require = { paths: { vs: window.location.protocol + '//' + window.location.host + '/vs' }};
+        </script>
+        <script src="/vs/loader.js" is:inline></script>
+        <script src="/vs/editor/editor.main.js" is:inline></script>
         <div id="container" class="h-72 border"></div>
     </div>
     <div class="flex-auto mx-3 md:w-1/6">

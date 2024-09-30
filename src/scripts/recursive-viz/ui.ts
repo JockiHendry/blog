@@ -1,11 +1,3 @@
-import * as monacoEditor from 'monaco-editor';
-import {editor} from 'monaco-editor';
-import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import JSONWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
-import CSSWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
-import HTMLWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
-import TSWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import {CodeRunner} from './runner';
 import fibonacciCodeTemplate from './template/fibonacci?raw';
 import nQueenCodeTemplate from './template/n-queen?raw';
@@ -52,31 +44,17 @@ if ((editorContainerElement == null) || (outputElement == null) || (codeTemplate
 
 // Controller
 
+//@ts-ignore
 function setupCodeEditor(editorContainerElement: HTMLElement): editor.ICodeEditor {
-    self.MonacoEnvironment = {
-        getWorker: function(_, label) {
-            if (label === 'json') {
-                return new JSONWorker();
-            }
-            if (label === 'css' || label === 'scss' || label === 'less') {
-                return new CSSWorker();
-            }
-            if (label === 'html' || label === 'handlebars' || label === 'razor') {
-                return new HTMLWorker();
-            }
-            if (label === "typescript" || label === "javascript") {
-                return new TSWorker();
-            }
-            return new EditorWorker();
-        }
-    };
-    const typescriptDefaults = monacoEditor.languages.typescript.typescriptDefaults;
+    //@ts-ignore
+    const typescriptDefaults = monaco.languages.typescript.typescriptDefaults;
     typescriptDefaults.setEagerModelSync(true);
     typescriptDefaults.addExtraLib(`
         class TreeNode {
             constructor(public val: any, public left?: TreeNode, public right?: TreeNode) {}
         }
     `);
+    //@ts-ignore
     return monaco.editor.create(editorContainerElement, {
         language: 'typescript',
         automaticLayout: true,
@@ -127,12 +105,13 @@ function setupVisualization(canvas: HTMLCanvasElement, prevStepButton: HTMLEleme
     return visualization;
 }
 
-function addCodeTemplateActionBinding(codeTemplateButton: HTMLElement, codeTemplateMenu: HTMLElement, codeEditor: editor.ICodeEditor) {
+function addCodeTemplateActionBinding(codeTemplateButton: HTMLElement, codeTemplateMenu: HTMLElement, codeEditor: any) {
     codeTemplateButton.addEventListener('click', () => toggleCodeTemplateMenu(codeTemplateMenu));
     codeTemplateMenu.addEventListener('mouseleave', () => {
         if (codeTemplateMenu.classList.contains('opacity-100')) {
             codeTemplateMenu.classList.remove('opacity-100', 'scale-100');
             codeTemplateMenu.classList.add('opacity-0', 'scale-95');
+            codeTemplateMenu.classList.add('hidden');
         }
     });
     fibonacciTemplateMenu?.addEventListener('click', () => {
@@ -159,20 +138,22 @@ function addCodeTemplateActionBinding(codeTemplateButton: HTMLElement, codeTempl
 
 function toggleCodeTemplateMenu(codeTemplateMenu: HTMLElement) {
     if (codeTemplateMenu.classList.contains('opacity-0')) {
+        codeTemplateMenu.classList.remove('hidden');
         codeTemplateMenu.classList.remove('opacity-0', 'scale-95')
         codeTemplateMenu.classList.add('opacity-100', 'scale-100');
     } else {
         codeTemplateMenu.classList.remove('opacity-100', 'scale-100');
         codeTemplateMenu.classList.add('opacity-0', 'scale-95');
+        codeTemplateMenu.classList.add('hidden');
     }
 }
 
-function selectTemplate(template: string, codeEditor: editor.ICodeEditor) {
-    codeEditor.setValue(template);
+function selectTemplate(template: string, codeEditor: any) {
+    codeEditor.setValue(template.replace(`// @ts-nocheck`, '').trimStart());
 }
 
 function addRunActionBinding(runButton: HTMLElement, clearOutputButton: HTMLElement, outputElement: HTMLElement,
-                             codeEditor: editor.ICodeEditor, visualization: Visualization, stepLabel: HTMLElement) {
+                             codeEditor: any, visualization: Visualization, stepLabel: HTMLElement) {
     runButton.addEventListener('click', () => {
         const runner = new CodeRunner(codeEditor.getValue(), (message) => {
             outputElement.textContent = message;
