@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 function solve(text: string): boolean {
     if (text.length <= 1) {
         return true;

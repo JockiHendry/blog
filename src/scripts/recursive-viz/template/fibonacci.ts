@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 function solve(n: number): number {
     if (n < 2) {
         return n;

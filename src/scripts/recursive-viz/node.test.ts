@@ -78,11 +78,11 @@ describe('Node', function () {
 
     test('findNodeByCanvasPosition', () => {
         const tree = new Node(1,[1]);
-        tree.x = 0;
-        tree.y = 0;
+        tree.setX(0);
+        tree.setY(0);
         const child = new Node(2,[2]);
-        child.x = 100;
-        child.y = 100;
+        child.setX(100);
+        child.setY(100);
         tree.addChild(child);
         expect(tree.findNodeByCanvasPosition(0, 0)).toEqual(tree);
         expect(tree.findNodeByCanvasPosition(10, 10)).toEqual(tree);

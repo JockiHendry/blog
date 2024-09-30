@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 function solve(left: TreeNode, right: TreeNode): boolean {
     if (left == null && right == null) {
         return true;

@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 (function() {
     const result = [];
     const consoleOutput = [];

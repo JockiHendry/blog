@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 function isSafe(board: number[][], row: number, col: number): boolean {
     for (let i=0; i<col; i++) {
         if (board[row][i] === 1) {

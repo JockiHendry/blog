@@ -57,7 +57,7 @@ export class ArrayRowArgRenderer implements ArgRenderer {
         }
     }
 
-    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
+    render(ctx: CanvasRenderingContext2D, x: number, y: number, _: number): void {
         ctx.save();
         x += 5;
         for (const v of this.value) {
@@ -97,7 +97,7 @@ export class MatrixArgRenderer implements ArgRenderer {
         };
     }
 
-    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
+    render(ctx: CanvasRenderingContext2D, x: number, y: number, _: number): void {
         ctx.save();
         let cy = y;
         for (const row of this.value) {
@@ -280,7 +280,7 @@ export class TreeArgRenderer implements ArgRenderer {
         this.height = 20 + bounds.height + 2 * this.RADIUS;
     }
 
-    getDimension(ctx: CanvasRenderingContext2D): Dimension {
+    getDimension(_: CanvasRenderingContext2D): Dimension {
         return {
             width: Math.max(this.width, 30),
             height: Math.max(this.height, 30),

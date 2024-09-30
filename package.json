@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro check && astro build",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && astro build",
     "build-staging": "astro check && MODE=staging astro build",
     "preview": "astro preview",
     "astro": "astro",

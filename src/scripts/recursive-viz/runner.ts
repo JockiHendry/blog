@@ -1,11 +1,11 @@
-import * as ts from "typescript";
+import ts from "typescript";
 import codeTemplate from './template/intercepted_code?raw';
 import type {RawRecord} from './node-factory';
 
 export class CodeRunner {
     public readonly completeCode: string;
 
-    constructor(private code: string, private log: (msg: string)=>void) {
+    constructor(code: string, private log: (msg: string)=>void) {
         this.completeCode = codeTemplate.replace(`// [JCK]$USER CODE HERE$[HDR]`, this.addContextToSolveFunction(code));
     }
 
