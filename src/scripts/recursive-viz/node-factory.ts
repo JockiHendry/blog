@@ -6,7 +6,18 @@ export class NodeFactory {
     create(data: RawRecord[]): Node|null {
         if (data.length === 0) return null;
 
-        const root = new Node(data[0][1], data[0][3]);
+        let root: Node;
+        const calledNonRecursively = data.filter(a => a[0] === 'enter' && a[2] == null).length > 1;
+        if (calledNonRecursively) {
+            root = new Node(-1, ['(main)']);
+            for (const a of data) {
+                if (a[2] == null) {
+                    a[2] = -1;
+                }
+            }
+        } else {
+            root = new Node(data[0][1], data[0][3]);
+        }
         let cur = [root];
         while (cur.length > 0) {
             const next = [];
