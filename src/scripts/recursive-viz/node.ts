@@ -1,12 +1,7 @@
-import type {ArgRenderer} from './arg-renderer';
-import {
-    ArrayRowArgRenderer,
-    BasicValueArgRenderer,
-    MatrixArgRenderer,
-    TreeArgRenderer
-} from './arg-renderer';
-import type {IBinaryTreeNode} from './arg-renderer';
+import type {ArgRenderer, IBinaryTreeNode} from './arg-renderer';
+import {ArrayRowArgRenderer, BasicValueArgRenderer, MatrixArgRenderer, TreeArgRenderer} from './arg-renderer';
 import type {ILayoutNode} from './tree-layout';
+import {ArrowDirection} from './visualization';
 
 export class Node implements Iterable<Node>, ILayoutNode {
 
@@ -171,7 +166,7 @@ export class Node implements Iterable<Node>, ILayoutNode {
         return this.height;
     }
 
-    render(ctx: CanvasRenderingContext2D, highlight = false) {
+    render(ctx: CanvasRenderingContext2D, highlight = false, direction = ArrowDirection.FROM_PARENT) {
         ctx.save();
         if (highlight) {
             ctx.lineWidth = 2;
@@ -189,47 +184,56 @@ export class Node implements Iterable<Node>, ILayoutNode {
         ctx.stroke();
         ctx.strokeStyle = highlight ? "rgb(10,10,200)": "rgb(50,50,50)";
         ctx.strokeRect(this.x, this.y, this.width, this.height);
-        this.drawConnector(ctx, highlight, highlight ? `${this.returnValue != null ? String(this.returnValue) : '(none)'}`: `#${this.nodeIndex}`);
+        if (highlight) {
+            direction = (direction === ArrowDirection.FROM_PARENT) ? ArrowDirection.TO_PARENT : ArrowDirection.FROM_PARENT;
+        }
+        let text = '(null)';
+        if (direction === ArrowDirection.FROM_PARENT) {
+            text = `#${this.nodeIndex}`;
+        } else if (direction === ArrowDirection.TO_PARENT) {
+            text = `${this.returnValue == null ? '(null)' : String(this.returnValue)}`;
+        }
+        this.drawConnector(ctx, highlight, text, direction);
         ctx.restore();
     }
 
-    private drawConnector(ctx: CanvasRenderingContext2D, highlight: boolean, text?: string) {
+    private drawConnector(ctx: CanvasRenderingContext2D, highlight: boolean, text?: string, direction = ArrowDirection.FROM_PARENT) {
         if (this.parent == null) return;
         ctx.save();
         ctx.beginPath();
-        const sourceX = highlight ? this.x + this.getWidth() / 2 : this.parent.x + this.parent.getWidth() / 2;
-        const sourceY = highlight ? this.y :  this.parent.y + this.parent.getHeight();
-        const targetX = highlight ? this.parent.x + this.parent.getWidth() / 2 : this.x + this.getWidth() / 2;
-        const targetY = highlight ? this.parent.y + this.parent.getHeight() : this.y - 5;
-        const angle = Math.atan2(targetY - sourceY, targetX - sourceX);
+        let sourceX = 0, sourceY = 0, targetX = 0, targetY = 0;
+        if (direction === ArrowDirection.FROM_PARENT) {
+            sourceX = this.parent.x + this.parent.getWidth() / 2;
+            sourceY = this.parent.y + this.parent.getHeight();
+            targetX = this.x + this.getWidth() / 2;
+            targetY = this.y - 5;
+        } else if (direction === ArrowDirection.TO_PARENT) {
+            sourceX = this.x + this.getWidth() / 2;
+            sourceY = this.y;
+            targetX = this.parent.x + this.parent.getWidth() / 2;
+            targetY = this.parent.y + this.parent.getHeight() + 3;
+        }
+        let angle = Math.atan2(targetY - sourceY, targetX - sourceX);
         ctx.lineCap = "round";
         ctx.moveTo(sourceX, sourceY);
         ctx.lineTo(targetX, targetY);
-        ctx.lineTo(targetX - 10 * Math.cos(angle - Math.PI / 6), targetY - 10 * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(targetX - 7 * Math.cos(angle - Math.PI / 6), targetY - 7 * Math.sin(angle - Math.PI / 6));
         ctx.moveTo(targetX, targetY);
-        ctx.lineTo(targetX - 10 * Math.cos(angle + Math.PI / 6), targetY - 10 * Math.sin(angle + Math.PI / 6));
+        ctx.lineTo(targetX - 7 * Math.cos(angle + Math.PI / 6), targetY - 7 * Math.sin(angle + Math.PI / 6));
         ctx.stroke();
         if (text != null) {
             ctx.textBaseline =  "bottom";
-            let middleX = sourceX + (targetX - sourceX) / 2;
-            if (Math.abs(angle) > 1.5) {
-                ctx.textAlign = highlight ? "start": "end";
-                if (highlight) {
-                    middleX += 10;
-                } else {
-                    middleX -= 10;
-                }
+            let middleX = Math.abs(sourceX + (targetX - sourceX) / 2);
+            if ((angle < 0 ? angle + Math.PI : angle) > (Math.PI / 2)) {
+                ctx.textAlign = "end";
+                middleX -= 10;
             } else {
-                ctx.textAlign = highlight ? "end": "start";
-                if (highlight) {
-                    middleX -= 10;
-                } else {
-                    middleX += 10;
-                }
+                ctx.textAlign = "start";
+                middleX += 10;
             }
             ctx.font = highlight ? "14px monospace": "12px monospace";
             ctx.fillStyle = highlight ? "rgb(10,10,200)": "rgb(50,50,50)";
-            ctx.fillText(text, middleX, sourceY + (targetY - sourceY) / 2);
+            ctx.fillText(text, middleX, Math.abs(sourceY + (targetY - sourceY) / 2));
         }
         ctx.restore();
     }

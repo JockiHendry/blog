@@ -24,6 +24,7 @@ const prevStepButton = document.getElementById("prevStepBtn");
 const stepLabel = document.getElementById("stepLabel");
 const nextStepButton = document.getElementById("nextStepBtn");
 const resetButton = document.getElementById("resetBtn");
+const changeDirectionButton = document.getElementById('changeDirectionBtn');
 const zoomOutButton = document.getElementById("zoomOutBtn");
 const zoomInButton = document.getElementById("zoomInBtn");
 const downloadButton = document.getElementById("downloadBtn");
@@ -33,11 +34,12 @@ let visualization: Visualization;
 if ((editorContainerElement == null) || (outputElement == null) || (codeTemplateButton == null) ||
     (codeTemplateMenu == null) || (runButton == null) || (clearOutputButton == null) || (canvas == null) ||
     (prevStepButton == null) || (stepLabel == null) || (resetButton == null) || (nextStepButton == null) ||
-    (zoomOutButton == null) || (zoomInButton == null) || (downloadButton == null)) {
+    (changeDirectionButton == null) || (zoomOutButton == null) || (zoomInButton == null) || (downloadButton == null)) {
     alert('Required UI element is not found.  Please reload the page and try again!');
 } else {
     const codeEditor = setupCodeEditor(editorContainerElement);
-    visualization = setupVisualization(canvas, prevStepButton, stepLabel, nextStepButton, resetButton, zoomOutButton, zoomInButton, downloadButton);
+    visualization = setupVisualization(canvas, prevStepButton, stepLabel, nextStepButton, resetButton, zoomOutButton,
+        zoomInButton, changeDirectionButton, downloadButton);
     addCodeTemplateActionBinding(codeTemplateButton, codeTemplateMenu, codeEditor);
     addRunActionBinding(runButton, clearOutputButton, outputElement, codeEditor, visualization, stepLabel);
 }
@@ -62,7 +64,7 @@ function setupCodeEditor(editorContainerElement: HTMLElement): editor.ICodeEdito
 }
 
 function setupVisualization(canvas: HTMLCanvasElement, prevStepButton: HTMLElement, stepLabel: HTMLElement, nextStepButton: HTMLElement,
-                            resetButton: HTMLElement, zoomOutButton: HTMLElement, zoomInButton: HTMLElement,
+                            resetButton: HTMLElement, zoomOutButton: HTMLElement, zoomInButton: HTMLElement, changeDirectionButton: HTMLElement,
                             downloadButton: HTMLElement): Visualization {
     const ctx = canvas.getContext('2d', {alpha: false});
     if (ctx == null) {
@@ -92,6 +94,10 @@ function setupVisualization(canvas: HTMLCanvasElement, prevStepButton: HTMLEleme
     });
     zoomInButton.addEventListener('click', () => {
         visualization.increaseFontSize();
+        visualization.draw();
+    });
+    changeDirectionButton.addEventListener('click', () => {
+        visualization.changeDirection();
         visualization.draw();
     });
     resetButton.addEventListener('click', () => {

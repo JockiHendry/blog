@@ -3,6 +3,11 @@ import {WalkerTreeLayout} from './tree-layout';
 import type {RawRecord} from './node-factory';
 import {NodeFactory} from './node-factory';
 
+export enum ArrowDirection {
+    FROM_PARENT,
+    TO_PARENT
+}
+
 export class Visualization {
 
     public static readonly DEFAULT_FONT_SIZE = 18;
@@ -20,7 +25,7 @@ export class Visualization {
     private highlightedNode: Node|null = null;
 
     constructor(private ctx: CanvasRenderingContext2D, private width: number, private height: number, private step = 0,
-                private fontSize = Visualization.DEFAULT_FONT_SIZE) {}
+                private fontSize = Visualization.DEFAULT_FONT_SIZE, private arrowDirection = ArrowDirection.FROM_PARENT) {}
 
     getCurrentStep(): number {
         return this.step;
@@ -47,6 +52,14 @@ export class Visualization {
     increaseFontSize() {
         if (this.fontSize < Visualization.MAXIMUM_FONT_SIZE) {
             this.fontSize += 2;
+        }
+    }
+
+    changeDirection() {
+        if (this.arrowDirection === ArrowDirection.TO_PARENT) {
+            this.arrowDirection = ArrowDirection.FROM_PARENT;
+        } else {
+            this.arrowDirection = ArrowDirection.TO_PARENT;
         }
     }
 
@@ -87,7 +100,7 @@ export class Visualization {
     }
 
     render(node: Node) {
-        node.render(this.ctx, node === this.highlightedNode);
+        node.render(this.ctx, node === this.highlightedNode, this.arrowDirection);
         for (const c of node) {
             this.render(c);
         }
