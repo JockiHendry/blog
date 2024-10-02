@@ -22,7 +22,7 @@ export class Node implements Iterable<Node>, ILayoutNode {
                     return new ArrayRowArgRenderer(a);
                 }
             }
-            if (typeof a === 'object' && 'val' in a && 'left' in a && 'right' in a) {
+            if (a != null && typeof a === 'object' && 'val' in a && 'left' in a && 'right' in a) {
                 return new TreeArgRenderer(a as IBinaryTreeNode);
             }
             return new BasicValueArgRenderer(a)
@@ -144,6 +144,10 @@ export class Node implements Iterable<Node>, ILayoutNode {
 
     getArgs(): ArgRenderer[] {
         return this.args;
+    }
+
+    getArg(index: number): ArgRenderer|null {
+        return this.args[index] ?? null;
     }
 
     measureSize(ctx: CanvasRenderingContext2D) {

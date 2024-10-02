@@ -1,9 +1,10 @@
 import {WalkerTreeLayout} from './tree-layout';
 import type {ILayoutNode} from './tree-layout';
 
-export interface ArgRenderer {
+export interface ArgRenderer<T = any> {
     getDimension(ctx: CanvasRenderingContext2D): Dimension;
     render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void;
+    getValue(): T;
 }
 
 export interface Dimension {
@@ -15,7 +16,7 @@ export class BasicValueArgRenderer implements ArgRenderer {
 
     public static readonly WIDTH_PADDING = 20;
 
-    constructor(public value: any) {}
+    constructor(private value: any) {}
 
     getDimension(ctx: CanvasRenderingContext2D): Dimension {
         const measurement = ctx.measureText(` ${String(this.value)} `);
@@ -31,15 +32,19 @@ export class BasicValueArgRenderer implements ArgRenderer {
         ctx.fillText(String(this.value), x + width / 2, y);
     }
 
+    getValue(): any {
+        return this.value;
+    }
+
 }
 
-export class ArrayRowArgRenderer implements ArgRenderer {
+export class ArrayRowArgRenderer implements ArgRenderer<any[]>{
 
     private boxWidth = 0;
     private boxHeight = 0;
 
 
-    constructor(public value: any[]) {}
+    constructor(private value: any[]) {}
 
     getDimension(ctx: CanvasRenderingContext2D): Dimension {
         let maximumWidth = 0;
@@ -70,14 +75,18 @@ export class ArrayRowArgRenderer implements ArgRenderer {
         ctx.restore();
     }
 
+    getValue(): any[] {
+        return this.value;
+    }
+
 }
 
-export class MatrixArgRenderer implements ArgRenderer {
+export class MatrixArgRenderer implements ArgRenderer<any[][]> {
 
     private cellWidth = 0;
     private cellHeight = 0;
 
-    constructor(public value: any[][]) {}
+    constructor(private value: any[][]) {}
 
     getDimension(ctx: CanvasRenderingContext2D): Dimension {
         let maxHeight = 0;
@@ -112,6 +121,10 @@ export class MatrixArgRenderer implements ArgRenderer {
             cy += this.cellHeight;
         }
         ctx.restore();
+    }
+
+    getValue(): any[][] {
+        return this.value;
     }
 
 }
@@ -264,7 +277,7 @@ export class BinaryTreeNode implements ILayoutNode {
     }
 }
 
-export class TreeArgRenderer implements ArgRenderer {
+export class TreeArgRenderer implements ArgRenderer<BinaryTreeNode> {
 
     private readonly root: BinaryTreeNode;
     private readonly width: number = 100;
@@ -327,4 +340,9 @@ export class TreeArgRenderer implements ArgRenderer {
         ctx.lineTo(targetX - dx * rL, targetY - dy * rL);
         ctx.stroke();
     }
+
+    getValue(): BinaryTreeNode {
+        return this.root;
+    }
+
 }
