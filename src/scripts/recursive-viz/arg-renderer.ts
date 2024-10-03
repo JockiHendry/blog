@@ -3,7 +3,7 @@ import type {ILayoutNode} from './tree-layout';
 
 export interface ArgRenderer<T = any> {
     getDimension(ctx: CanvasRenderingContext2D): Dimension;
-    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void;
+    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void;
     getValue(): T;
 }
 
@@ -21,15 +21,15 @@ export class BasicValueArgRenderer implements ArgRenderer {
     getDimension(ctx: CanvasRenderingContext2D): Dimension {
         const measurement = ctx.measureText(` ${String(this.value)} `);
         return {
-            width: Math.max(measurement.width + BasicValueArgRenderer.WIDTH_PADDING, 30),
-            height: Math.max(measurement.actualBoundingBoxAscent + measurement.actualBoundingBoxDescent, 30),
+            width: Math.max(Math.round(measurement.width) + BasicValueArgRenderer.WIDTH_PADDING, 30),
+            height: Math.max(Math.round(measurement.actualBoundingBoxAscent + measurement.actualBoundingBoxDescent), 30),
         };
     }
 
-    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
-        ctx.textBaseline = 'top';
+    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+        ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
-        ctx.fillText(String(this.value), x + width / 2, y);
+        ctx.fillText(String(this.value), x + width/2, y + height/2);
     }
 
     getValue(): any {
@@ -57,14 +57,15 @@ export class ArrayRowArgRenderer implements ArgRenderer<any[]>{
         this.boxWidth = maximumWidth + 5;
         this.boxHeight = maximumHeight + 10;
         return {
-            width: Math.max(this.boxWidth * this.value.length + 10, 30),
-            height: Math.max(this.boxHeight, 30),
+            width: Math.max(this.boxWidth * this.value.length + 5, 30),
+            height: Math.max(this.boxHeight + 10, 30),
         }
     }
 
     render(ctx: CanvasRenderingContext2D, x: number, y: number, _: number): void {
         ctx.save();
         x += 5;
+        y += 5;
         for (const v of this.value) {
             ctx.strokeRect(x, y, this.boxWidth, this.boxHeight);
             ctx.textBaseline = 'middle';
@@ -102,13 +103,13 @@ export class MatrixArgRenderer implements ArgRenderer<any[][]> {
         this.cellHeight = maxHeight + 10;
         return {
             width: Math.max(this.value.length === 0 ? 0 : this.value[0].length * this.cellWidth + 10, 30),
-            height: Math.max(this.value.length * this.cellHeight + 5, 30),
+            height: Math.max(this.value.length * this.cellHeight + 10, 30),
         };
     }
 
     render(ctx: CanvasRenderingContext2D, x: number, y: number, _: number): void {
         ctx.save();
-        let cy = y;
+        let cy = y + 5;
         for (const row of this.value) {
             let cx = x + 5
             for (const v of row) {
@@ -301,13 +302,7 @@ export class TreeArgRenderer implements ArgRenderer<BinaryTreeNode> {
     }
 
     render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
-        ctx.save();
         this.renderNode(ctx, this.root, x, y);
-        ctx.beginPath();
-        ctx.moveTo(x, y + this.height);
-        ctx.lineTo(x + width, y + this.height);
-        ctx.stroke();
-        ctx.restore();
     }
 
     renderNode(ctx: CanvasRenderingContext2D, node: BinaryTreeNode, x: number, y: number) {
