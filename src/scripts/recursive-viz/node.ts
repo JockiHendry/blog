@@ -195,7 +195,7 @@ export class Node implements Iterable<Node>, ILayoutNode {
         if (direction === ArrowDirection.FROM_PARENT) {
             text = `#${this.nodeIndex}`;
         } else if (direction === ArrowDirection.TO_PARENT) {
-            text = `${this.returnValue == null ? '(null)' : String(this.returnValue)}`;
+            text = `${this.returnValue == null ? '(null)' : JSON.stringify(this.returnValue)}`;
         }
         this.drawConnector(ctx, highlight, text, direction);
         ctx.restore();

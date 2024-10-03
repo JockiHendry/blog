@@ -6,6 +6,8 @@ import tailwind from "@astrojs/tailwind";
 import rehypeMermaid from 'rehype-mermaid';
 import starlightImageZoom from 'starlight-image-zoom';
 import serviceWorkerIntegration from './src/integrations/serviceWorker';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
 
 
 // https://astro.build/config
@@ -40,7 +42,8 @@ export default defineConfig({
     serviceWorkerIntegration(),
   ],
   markdown: {
-    rehypePlugins: [[rehypeMermaid, {strategy: "img-svg"}]],
+    remarkPlugins: [remarkMath],
+    rehypePlugins: [[rehypeMermaid, {strategy: "img-svg"}], rehypeKatex],
   },
   trailingSlash: 'never',  
 });
