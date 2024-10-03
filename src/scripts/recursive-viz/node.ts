@@ -5,7 +5,7 @@ import {ArrowDirection} from './visualization';
 
 export class Node implements Iterable<Node>, ILayoutNode {
 
-    private static readonly HEIGHT_SEPARATOR = 10;
+    private static readonly WIDTH_SEPARATOR = 5;
     private width = 50;
     private height = 50;
 
@@ -155,8 +155,8 @@ export class Node implements Iterable<Node>, ILayoutNode {
         let maxHeight = 10;
         for (const a of this.args) {
             const dimension = a.getDimension(ctx);
-            maxHeight += dimension.height + Node.HEIGHT_SEPARATOR;
-            maxWidth = Math.max(maxWidth, dimension.width);
+            maxWidth += dimension.width + Node.WIDTH_SEPARATOR;
+            maxHeight = Math.max(maxHeight, dimension.height);
         }
         this.height = maxHeight;
         this.width = maxWidth;
@@ -175,17 +175,17 @@ export class Node implements Iterable<Node>, ILayoutNode {
         if (highlight) {
             ctx.lineWidth = 2;
         }
-        let curY = this.y + 10;
+        let curX = this.x;
         ctx.fillStyle = highlight ? "blue": "black";
-        ctx.beginPath();
         for (const a of this.args) {
+            ctx.beginPath();
             const dimension = a.getDimension(ctx);
-            a.render(ctx, this.x, curY, this.width);
-            curY += dimension.height + Node.HEIGHT_SEPARATOR;
-            ctx.moveTo(this.x, curY-(Node.HEIGHT_SEPARATOR/2));
-            ctx.lineTo(this.x + this.getWidth(), curY-(Node.HEIGHT_SEPARATOR/2));
+            a.render(ctx, curX, this.y, dimension.width, dimension.height);
+            curX += dimension.width + Node.WIDTH_SEPARATOR;
+            ctx.moveTo(curX, this.y);
+            ctx.lineTo(curX, this.y + this.height);
+            ctx.stroke();
         }
-        ctx.stroke();
         ctx.strokeStyle = highlight ? "rgb(10,10,200)": "rgb(50,50,50)";
         ctx.strokeRect(this.x, this.y, this.width, this.height);
         if (highlight) {
