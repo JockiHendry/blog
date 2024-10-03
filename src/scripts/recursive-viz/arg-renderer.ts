@@ -29,7 +29,7 @@ export class BasicValueArgRenderer implements ArgRenderer {
     render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
-        ctx.fillText(String(this.value), x + width/2, y + height/2);
+        ctx.fillText(String(JSON.stringify(this.value)), x + width/2, y + height/2);
     }
 
     getValue(): any {
@@ -290,7 +290,8 @@ export class TreeArgRenderer implements ArgRenderer<BinaryTreeNode> {
         this.root = new BinaryTreeNode(value);
         new WalkerTreeLayout(this.root, 50, 10).layout();
         const bounds = this.root.getBounds();
-        this.width = Math.max(bounds.width, 100);
+        this.width = Math.max(bounds.width + 20, 100);
+        new WalkerTreeLayout(this.root, this.width / 2, 10).layout();
         this.height = 20 + bounds.height + 2 * this.RADIUS;
     }
 
@@ -310,6 +311,7 @@ export class TreeArgRenderer implements ArgRenderer<BinaryTreeNode> {
         ctx.beginPath();
         ctx.arc(x + node.x, y + node.y,10, 0, 2*Math.PI);
         ctx.stroke();
+        ctx.font = '12px monospace';
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
         ctx.fillText(node.val, x + node.x, y + node.y);

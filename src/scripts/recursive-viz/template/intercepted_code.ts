@@ -1,13 +1,13 @@
 // @ts-nocheck
 
 (function() {
-    const result = [];
-    const consoleOutput = [];
+    const JCHHDR_INTERNAL_result = [];
+    const JCHHDR_INTERNAL_consoleOutput = [];
 
-    const originalLog = console.log;
+    const JCHHDR_INTERNAL_originalLog = console.log;
     console.log = (...args) => {
         const line = args.map(a => String(a)).join('\t') + '\n';
-        consoleOutput.push(line);
+        JCHHDR_INTERNAL_consoleOutput.push(line);
     }
 
     class TreeNode {
@@ -21,15 +21,15 @@
             console.log('Warning: recursive function not found!');
             console.log('The recursive function to visualize must be declared with name "solve"\n');
         } else {
-            const originalSolveFn = solve;
-            let executionCounter = 0;
+            const JCHHDR_INTRNAL_originalSolveFn = solve;
+            let JCHHDR_INTERNAL_executionCounter = 0;
             solve = new Proxy(solve, {
                 apply(target, thisArg, argumentsList) {
-                    const currentExecutionCounter = executionCounter++;
-                    const parentExecutionCounter = thisArg?.__executionCounter__ ?? null;
-                    result.push(['enter', currentExecutionCounter, parentExecutionCounter, argumentsList.map(a => fnSolveArgToString(a))]);
-                    let functionResult = originalSolveFn.apply({'__executionCounter__': currentExecutionCounter}, argumentsList);
-                    result.push(['exit', currentExecutionCounter, parentExecutionCounter, fnSolveResultToString(functionResult)]);
+                    const JCHHDR_INTERNAL_currentExecutionCounter = JCHHDR_INTERNAL_executionCounter++;
+                    const JCHHDR_INTERNAL_parentExecutionCounter = thisArg?.__executionCounter__ ?? null;
+                    JCHHDR_INTERNAL_result.push(['enter', JCHHDR_INTERNAL_currentExecutionCounter, JCHHDR_INTERNAL_parentExecutionCounter, argumentsList.map(a => fnSolveArgToString(a))]);
+                    let functionResult = JCHHDR_INTRNAL_originalSolveFn.apply({'__executionCounter__': JCHHDR_INTERNAL_currentExecutionCounter}, argumentsList);
+                    JCHHDR_INTERNAL_result.push(['exit', JCHHDR_INTERNAL_currentExecutionCounter, JCHHDR_INTERNAL_parentExecutionCounter, fnSolveResultToString(functionResult)]);
                     return functionResult;
                 }
             });
@@ -40,8 +40,8 @@
     } catch (err) {
         console.log(err);
     } finally {
-        console.log = originalLog;
+        console.log = JCHHDR_INTERNAL_originalLog;
     }
 
-    return [result, consoleOutput];
+    return [JCHHDR_INTERNAL_result, JCHHDR_INTERNAL_consoleOutput];
 })();
