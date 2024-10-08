@@ -1,0 +1,38 @@
+---
+---
+<div class="bg-slate-200 p-5">
+    <div id="profileKosong" class="text-gray-500 text-center">
+        Tidak ada information yang ditampilkan karena belum login!
+    </div>
+    <div id="profileUser" class="flex items-center gap-4 hidden !mt-0">
+        <img id="profileImage" class="w-10 h-10 rounded-full" src="" alt="">
+        <div class="font-medium !mt-0">
+            <div id="profileFullName">Nama Lengkap</div>
+            <div id="profileEmail" class="text-sm text-gray-500 !mt-0">email@domain.com</div>
+        </div>
+    </div>    
+</div>
+
+<script>
+    const profileKosong = document.getElementById("profileKosong");
+    const profileUser = document.getElementById("profileUser");
+    const profileImage = document.getElementById("profileImage") as HTMLImageElement;
+    const profileFullName = document.getElementById("profileFullName");
+    const profileEmail = document.getElementById("profileEmail");
+
+    document.getElementById('eventDispatcher')?.addEventListener('tokenExchanged',(e) => {   
+        const idToken: string = (e as any).detail.idToken;            
+        if (idToken == null) {
+            profileUser?.classList.add('hidden');
+            profileKosong?.classList.remove('hidden');
+            return;
+        }
+        const parts = idToken.split('.');        
+        const token = JSON.parse(atob(parts[1]));    
+        profileImage.src = token.picture;
+        profileFullName!.innerText = token.nickname;
+        profileEmail!.innerText = token.email;
+        profileKosong?.classList.add('hidden');
+        profileUser?.classList.remove('hidden');
+    });    
+</script>
