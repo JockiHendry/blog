@@ -1,4 +1,5 @@
 import {CodeRunner} from './runner';
+import combinationCodeTemplate from './template/combination?raw';
 import fibonacciCodeTemplate from './template/fibonacci?raw';
 import nQueenCodeTemplate from './template/n-queen?raw';
 import palindromeCodeTemplate from './template/palindrome?raw';
@@ -12,6 +13,7 @@ const editorContainerElement = document.getElementById('container');
 const outputElement = document.getElementById('runOutput');
 const codeTemplateMenu = document.getElementById('codeTemplateMenu');
 const codeTemplateButton = document.getElementById('codeTemplateBtn');
+const combinationTemplateMenu = document.getElementById('combinationTemplateMenu');
 const fibonacciTemplateMenu = document.getElementById('fibonacciTemplateMenu');
 const mirrorBinaryTreeTemplateMenu = document.getElementById('mirrorBinaryTreeTemplateMenu');
 const nQueenTemplateMenu = document.getElementById('nQueenTemplateMenu');
@@ -120,6 +122,10 @@ function addCodeTemplateActionBinding(codeTemplateButton: HTMLElement, codeTempl
             codeTemplateMenu.classList.add('hidden');
         }
     });
+    combinationTemplateMenu?.addEventListener('click', () => {
+        selectTemplate(combinationCodeTemplate, codeEditor);
+        toggleCodeTemplateMenu(codeTemplateMenu);
+    })
     fibonacciTemplateMenu?.addEventListener('click', () => {
         selectTemplate(fibonacciCodeTemplate, codeEditor);
         toggleCodeTemplateMenu(codeTemplateMenu);
