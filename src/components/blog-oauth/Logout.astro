@@ -1,0 +1,24 @@
+<button id="logoutBtn" type="button" class="bg-lime-600 hover:bg-lime-500 text-white fond-bold p-4 rounded-full cursor-not-allowed" disabled>Logout</button>
+
+<script>
+    const redirectUrl = `${window.location.protocol}//${window.location.host}/blog/2024-10-07-cara-kerja-stateless-oauth-jwt`;
+    const logoutBtn = document.getElementById('logoutBtn')! as HTMLButtonElement;
+    let idToken: string|null = null;        
+    document.getElementById('eventDispatcher')?.addEventListener('tokenExchanged', (e) => {
+        if ((e as CustomEvent).detail?.idToken != null) {
+            idToken = (e as CustomEvent).detail.idToken;
+            logoutBtn.disabled = false;
+            logoutBtn.classList.remove('cursor-not-allowed');
+            logoutBtn.classList.add('cursor-pointer');
+        } else {
+            idToken = null;
+            logoutBtn.disabled = true;
+            logoutBtn.classList.add('cursor-not-allowed');
+        }
+    });
+    logoutBtn.addEventListener('click', () => {
+        window.location.href = `https://dev-0nhqm15bupw57vxv.us.auth0.com/oidc/logout?` +
+            `id_token_hint=${idToken}&` +
+            `post_logout_redirect_uri=${redirectUrl}`;            
+    });
+</script>
