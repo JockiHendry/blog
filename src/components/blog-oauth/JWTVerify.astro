@@ -1,0 +1,179 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+
+---
+<div class="bg-slate-200 p-3">
+    <div class="flex flex-col">
+        <div class="flex flex-row align-center items-center gap-3">
+            <div>Method</div>
+            <select class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block p-2.5 !mt-0" id="requestMethodSelect">
+                <option value="GET">GET</option>
+                <option value="DELETE">DELETE</option>
+            </select>
+            <div class="!mt-0">Path</div>
+            <select class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block p-2.5 w-full !mt-0">
+                <option>/blogs/1</option>                
+            </select>
+            <button id="executeBtn" class="!mt-0 bg-lime-600 hover:bg-lime-500 text-white fond-bold p-2 rounded-full cursor-pointer">Execute</button>
+        </div>
+    </div>        
+    <textarea id="textAreaInput" class="block p-2.5 w-full text-sm text-gray-900 bg-gray-50 rounded-lg border-gray-300 h-80" placeholder="Paste JWT disini: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"></textarea>    
+    <div id="goodOutput" class="flex flex-row gap-3 items-center hidden">
+        <Icon name="approve-check-circle" size="2rem" color="green" class="flex-none"/> 
+        <div class="!mt-0 text-green-800">JWT di-sign oleh saya</div>
+    </div>
+    <div id="badOutput" class="flex flex-row gap-3 items-center hidden">
+        <Icon name="error" size="2rem" color="red" class="flex-none" />            
+        <div class="!mt-0 text-red-600">JWT belum kadaluarsa</div>
+    </div>        
+    <div id="jwtVerificationOutputArea" class="hidden">        
+    </div>
+</div>
+
+
+<script>  
+const textAreaInput = document.getElementById("textAreaInput") as HTMLTextAreaElement;
+const executeBtn = document.getElementById("executeBtn");
+const outputArea = document.getElementById("jwtVerificationOutputArea");
+const goodOutput = document.getElementById("goodOutput");
+const badOutput = document.getElementById("badOutput");
+const requestMethodSelect = document.getElementById("requestMethodSelect") as HTMLSelectElement;
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+executeBtn?.addEventListener('click', async () => {
+    await verifyJWT();
+});
+
+async function fetchJWKS() {
+    const globalJWKS = (window as any).JWKS;
+    if (globalJWKS != null) {
+        return globalJWKS;
+    }
+    let jwks: {keys: (JsonWebKey|{kid:string,x5t:string,x5c:string[]})[]};
+    try {
+        const response = await fetch("https://dev-0nhqm15bupw57vxv.us.auth0.com/.well-known/jwks.json");
+        jwks = (await response.json()) as {keys: (JsonWebKey|{kid:string,x5t:string,x5c:string[]})[]};
+        (window as any).JWKS = jwks;        
+    } catch (err) {
+        jwks = {
+            keys: [
+                {
+                    kty: "RSA",
+                    use: "sig",
+                    n: "xyzG7XOYqEgNZ80jk7In0GOEGd47HH0k3kicnLZw4Q0wiModmrPREzxG6oCocJxWQtLcjOBESVXsVZHnqmrrcrKgMPBZtaPrR_DHfwYoumZl6A13YVMcVsKkwuNb8wLkOLXK-e5bRaGVwjRJsDvT6pXssQ6zdXS9JojH6QRj7QkVocNqfDOm_o-KaFQ60btBGJi2fOu2iXVl953XQzYxCmf7fjPHn46W00GrprI4j8M32_PcvpJRT47w0yVB4E6EyIxCkRu-A5NTlwd42DgD6fengrB7zBGj1fqRNU8WFS-rmQFXBMGR5qjyeJ-_xyDL-DCNG3GZs8lAjzEQ2Q9MMQ",
+                    e: "AQAB",
+                    kid: "H6J8LbJl2fW9LooSipdxY",
+                    x5t: "fJfvwcNnTicVyZW4KVvUcvO3m6U", 
+                    x5c: [
+                        "MIIDHTCCAgWgAwIBAgIJMO90wvDxMlJmMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMTIWRldi0wbmhxbTE1YnVwdzU3dnh2LnVzLmF1dGgwLmNvbTAeFw0yNDEwMDYwOTUwNDdaFw0zODA2MTUwOTUwNDdaMCwxKjAoBgNVBAMTIWRldi0wbmhxbTE1YnVwdzU3dnh2LnVzLmF1dGgwLmNvbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMcsxu1zmKhIDWfNI5OyJ9BjhBneOxx9JN5InJy2cOENMIjKHZqz0RM8RuqAqHCcVkLS3IzgRElV7FWR56pq63KyoDDwWbWj60fwx38GKLpmZegNd2FTHFbCpMLjW/MC5Di1yvnuW0WhlcI0SbA70+qV7LEOs3V0vSaIx+kEY+0JFaHDanwzpv6PimhUOtG7QRiYtnzrtol1Zfed10M2MQpn+34zx5+OltNBq6ayOI/DN9vz3L6SUU+O8NMlQeBOhMiMQpEbvgOTU5cHeNg4A+n3p4Kwe8wRo9X6kTVPFhUvq5kBVwTBkeao8nifv8cgy/gwjRtxmbPJQI8xENkPTDECAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUy3tveX/ueojUB3nQXLVdFXksyNYwDgYDVR0PAQH/BAQDAgKEMA0GCSqGSIb3DQEBCwUAA4IBAQBf0s/PTnvhkcmPg0SWZLNEEEN9migeEvhofj+YeiRnfwwrWDdWX3dWpCC5aPIP683oGvAFzUSoDTw99wGR1iMtv726gT5Z5r1/6dZZvTTmoCYicsl/dSBeAFz4ThEgA8Sfe6aAFf5gLwTjTGwUsfRIdJg7cOfoFMOhym72aE8D77qbxvG474AdKqRX9X1lRHmh+EjCAD8L8rNLlMa571Wc/gsIzNZTsYfdJ/Tv9ibt3cvqV9h8F+YvVSPSdVRgzxHY7G+ElnHm1hw0/SgMYQkdgtU8z3DUEL6ZUuQC595TgnhqO9Mz7I/vi+PjL31hPS28rsvl9E3I09aCcf/G4y9r"
+                    ],
+                    alg: "RS256"
+                },{
+                    kty: "RSA",
+                    use: "sig",
+                    n: "p2Mb4ivK6JycZjASdta5aTeEFLBhvbp82z1aIuOp5EUyFcIFVqzAf5n4N_UMrVGQGE-rK8uLck-GYN3sf-MU8PAfAlOBd7b8D0VBK7NgZr_AlsgcxzH8rt7yhTc5_RBvgjgajKyzsctQGCBt1f6Hk45sf821gRImcNd_zD-mnPj5O5-LuX-DQsy6lCic7ka7aQRbvXOKtA3VR2m_Vk-2Lrw3FKBCEwfTAs1aCIrQu2MOHlh6wAUJg6itvsMTB1CkoQbVupWXgY1IvZfFCbBvHTMW8LBi7eeXCkvOmC15I1iangmZaif7i6WgH185bh2gjk3u6SNF6O2qD_PFnWqi8Q",
+                    e: "AQAB",
+                    kid: "p-9i4_9J07cOFfKljv9BH",
+                    x5t: "4D0FBKpQ707HIj1o4HVAJh8B0Cc",
+                    x5c: [
+                        "MIIDHTCCAgWgAwIBAgIJXrUasNPs5OE+MA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMTIWRldi0wbmhxbTE1YnVwdzU3dnh2LnVzLmF1dGgwLmNvbTAeFw0yNDEwMDYwOTUwNDhaFw0zODA2MTUwOTUwNDhaMCwxKjAoBgNVBAMTIWRldi0wbmhxbTE1YnVwdzU3dnh2LnVzLmF1dGgwLmNvbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAKdjG+IryuicnGYwEnbWuWk3hBSwYb26fNs9WiLjqeRFMhXCBVaswH+Z+Df1DK1RkBhPqyvLi3JPhmDd7H/jFPDwHwJTgXe2/A9FQSuzYGa/wJbIHMcx/K7e8oU3Of0Qb4I4Goyss7HLUBggbdX+h5OObH/NtYESJnDXf8w/ppz4+Tufi7l/g0LMupQonO5Gu2kEW71zirQN1Udpv1ZPti68NxSgQhMH0wLNWgiK0LtjDh5YesAFCYOorb7DEwdQpKEG1bqVl4GNSL2XxQmwbx0zFvCwYu3nlwpLzpgteSNYmp4JmWon+4uloB9fOW4doI5N7ukjRejtqg/zxZ1qovECAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQULwh70uRv6N18ExkVq5Lwf6klbKQwDgYDVR0PAQH/BAQDAgKEMA0GCSqGSIb3DQEBCwUAA4IBAQBdjpgZKkKxonqshIn2sKdWRRc3gYAyOxRlHwSJ2ghgYt0oaV/lTCQFEPF4hSd+dXpIQlh6rk/LbWMQfnydYeaAOD+53PDLdxz9EcxkXVgC2+S7KUI/9pjBepk53bts9oCDG71GuCMQQ6ZNVYy+AyLFPVpSAYNQzLf4acYU3KCN6QsnAtiGBKToOjh5gI69th6ABr7AC85DQIIV3UxY1YhYB2gtxxV+sL/7lH2Rbqoi4Q8xZdCQPlkU5cjdSZIMZKwZ6XTyDnVmxxmv2hL1YLoHIRURYaft/1uicBbris97hcfN7JaQ7kg6Cf1nsX1DSOQTGXdmD/amttIejUxvSVTq"
+                    ],
+                    alg: "RS256"
+                }
+            ],
+        };
+        (window as any).JWKS = jwks;    
+    }
+    return jwks;
+}
+
+async function verifyJWT() {    
+    resetPresentation();
+    const jwks = await fetchJWKS();
+    const jwtInput = textAreaInput!.value;    
+    if (jwtInput == null || jwtInput.length === 0) {
+        addError('JWT tidak ditemukan!');        
+        return;
+    }        
+    const parts = jwtInput.split('.');
+    if (parts.length !== 3) {
+        addError('Format JWT salah!');
+        return;
+    }        
+    const header = JSON.parse(decoder.decode(decode(parts[0])));
+    if (header.alg !== 'RS256') {
+        addError(`Backend hanya mendukung RS256 namun ketemu ${header.alg}`);
+        return;
+    }
+    const payload = JSON.parse(decoder.decode(decode(parts[1])));
+    const signature = decode(parts[2]);
+    const dataToVerify = encoder.encode(parts[0] + '.' + parts[1]);    
+    const publicKey = await crypto.subtle.importKey('jwk', jwks.keys[0], {
+        name: 'RSASSA-PKCS1-v1_5',
+        hash: { name: 'SHA-256' }
+    }, false, ['verify']);
+    const verified = await crypto.subtle.verify(
+        {name: 'RSASSA-PKCS1-v1_5'},
+        publicKey,
+        signature,
+        dataToVerify,
+    );
+    if (verified) {
+        addSuccess('Digital signature JWT berhasil diverifikasi');    
+    } else {
+        addError('Verifikasi digital signature JWT gagal!');
+        return;
+    }
+    if (payload.iss === 'https://dev-0nhqm15bupw57vxv.us.auth0.com/') {
+        addSuccess(`Penerbit JWT adalah Authorization Server yang seharusnya: ${payload.iss}`);
+    } else {
+        addError(`Penerbit sertifikat tidak dikenali: ${payload.iss}`);        
+    }
+    if (payload.exp > Date.now() / 1000) {
+        addSuccess(`JWT akan kadaluarsa pada ${new Date(payload.exp * 1000).toLocaleString()}`);
+    } else {
+        addError(`JWT sudah kadaluarsa pada: ${new Date(payload.exp * 1000).toLocaleString()}`);
+    }
+    if (requestMethodSelect.value === 'DELETE') {
+        if (payload.permissions.includes("delete:blogs")) {
+            addSuccess('Pengguna memiliki permission untuk memanggil API ini');
+        } else {
+            addError('Pengguna tidak memiliki permission untuk memanggil API ini!');
+        }
+    }    
+}
+
+function decode(input: string) {
+    input = input.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
+    const binary = atob(input);
+    const bytes = new Uint8Array(binary.length);
+    for (let i=0; i<binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;    
+}
+
+function resetPresentation() {
+    outputArea!.classList.add('hidden');
+    outputArea!.innerHTML = "";
+}
+
+function addError(message: string) {
+    const outputPresentation = badOutput?.cloneNode(true) as HTMLElement;
+    outputPresentation.removeAttribute('id');        
+    outputPresentation.classList.remove('hidden');
+    outputPresentation.children[1].textContent = message;
+    outputArea?.appendChild(outputPresentation);  
+    outputArea?.classList.remove('hidden');    
+}
+
+function addSuccess(message: string) {
+    const outputPresentation = goodOutput?.cloneNode(true) as HTMLElement;
+    outputPresentation.removeAttribute('id');        
+    outputPresentation.classList.remove('hidden');
+    outputPresentation.children[1].textContent = message;
+    outputArea?.appendChild(outputPresentation);  
+    outputArea?.classList.remove('hidden');    
+}
+</script>

@@ -1,0 +1,108 @@
+---
+---
+
+<div class="bg-slate-200 p-3">
+    <div class="flex flex-col">
+        <label for="authorizationCodeTxt" class="block mb-2 text-sm font-medium text-gray-900">Authorization Code:</label>
+        <input id="authorizationCodeTxt" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:border-blue-500 block w-full p-2.5" type="text" value="" placeholder="Belum ada authorization code"/>
+    </div>
+
+    <div class="flex flex-col">
+        <label for="stateTxt" class="block mb-2 text-sm font-medium text-gray-900">State</label>
+        <input id="stateTxt" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:border-blue-500 block w-full p-2.5" type="text" value="" placeholder="Belum ada state" readonly/>
+    </div>
+    
+    <button id="exchangeBtn" class="bg-lime-600 hover:bg-lime-500 text-white fond-bold p-4 rounded-full cursor-pointer">Tukar Authorization Code Dengan Token</button>
+
+    <div id="output" class="flex flex-col hidden">
+        <div>
+            <span class="text-sm text-gray-500">HTTP Status:</span> <span id="httpStatus"></span>
+        </div>   
+        <div>
+            <span class="text-sm text-gray-500">Access Token:</span>
+        </div>
+        <pre id="accessTokenOutput" class="bg-white overflow-auto text-wrap my-1"></pre>    
+        <div>
+            <span class="text-sm text-gray-500">ID Token:</span>
+        </div>
+        <pre id="idTokenOutput" class="bg-white overflow-auto text-wrap"></pre>
+        <div id="userInfoOutput">
+        </div>
+    </div>
+    
+    
+</div>
+
+
+<script>    
+    const authorizationCodeTxt = document.getElementById("authorizationCodeTxt")! as HTMLFormElement;
+    const stateTxt = document.getElementById("stateTxt")! as HTMLFormElement;
+    const exchangeBtn = document.getElementById("exchangeBtn")!;
+    const divOutput = document.getElementById("output")!;
+    const httpResponseStatus = document.getElementById("httpStatus")!;
+    const accessTokenOutput = document.getElementById("accessTokenOutput")!;
+    const idTokenOutput = document.getElementById("idTokenOutput")!;    
+
+    function init() {
+        const redirectUrl = `${window.location.protocol}//${window.location.host}/blog/2024-10-07-cara-kerja-stateless-oauth-jwt`;
+        let authorizationCode = null;
+        let state = null;
+        const url = new URL(document.location.href);
+        if (url.searchParams.has("error")) {        
+            alert(url.searchParams.get("error") + '\n' + url.searchParams.get('error_description'));        
+            return;
+        }
+        if (url.searchParams.has("code")) {
+            authorizationCode = url.searchParams.get("code")!;
+        }
+        if (url.searchParams.has("state")) {
+            state = url.searchParams.get("state");
+        }
+        authorizationCodeTxt.value = authorizationCode;
+        stateTxt.value = state;
+
+        exchangeBtn.addEventListener("click", async () => {
+            const authorizationCode = authorizationCodeTxt.value;
+            const state = stateTxt.value;
+            if (authorizationCode == null || state == null) {
+                alert('Belum ada authorization code!');
+                return;
+            }
+            if (state !== 'HALAMAN_DEMO_JOCKI') {
+                alert('Nilai state salah!');
+                return;
+            }
+            try {
+                const response = await fetch('https://dev-0nhqm15bupw57vxv.us.auth0.com/oauth/token', {
+                    method: 'POST',
+                    headers: {
+                        'content-type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        grant_type: 'authorization_code',
+                        code: authorizationCode,
+                        client_id: '67qa0cIIgtRh3n9S0nRC5GTdFC9ukWyk',                
+                        redirect_uri: redirectUrl,                    
+                    }),
+                });            
+                httpResponseStatus.innerHTML = `${response.statusText} (${response.status})`;
+                const jsonResponse = await response.json();                                
+                document.getElementById('eventDispatcher')!.dispatchEvent(new CustomEvent('tokenExchanged', {
+                    detail: {
+                        accessToken: jsonResponse['access_token'],
+                        idToken: jsonResponse['id_token'],
+                    }                    
+                }));
+                accessTokenOutput.innerText = jsonResponse['access_token'];
+                idTokenOutput.innerText = jsonResponse['id_token'];                
+                divOutput.classList.remove("hidden");                
+            } catch (err) {                        
+                accessTokenOutput.innerText = String(err);
+            }
+            
+        }); 
+    }
+
+    init();
+       
+</script>

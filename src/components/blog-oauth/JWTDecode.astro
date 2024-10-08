@@ -1,0 +1,32 @@
+---
+---
+
+<div class="bg-slate-200 p-3">
+    <button id="decodeJWTBtn" class="bg-lime-600 hover:bg-lime-500 text-white fond-bold p-4 my-2 rounded-full cursor-pointer">Decode Access Token</button>
+    <pre id="jwtDecodedHeaderOutput" class="bg-white overflow-auto text-wrap hidden my-1"></pre>    
+    <pre id="jwtDecodedPayloadOutput" class="bg-white overflow-auto text-wrap hidden my-1"></pre>    
+</div>
+
+
+<script>    
+    const jwtHeaderOutput = document.getElementById("jwtDecodedHeaderOutput")!;
+    const jwtDecodedPayloadOutput = document.getElementById("jwtDecodedPayloadOutput")!;    
+
+    let accessToken: string|null = null;
+
+    document.getElementById('eventDispatcher')?.addEventListener('tokenExchanged', (e) => {
+        accessToken = ((e as CustomEvent).detail?.accessToken) ?? null;
+    });
+
+    document.getElementById("decodeJWTBtn")?.addEventListener('click', () => {
+        if (accessToken == null) {
+            alert('Tidak menemukan access token untuk di-decode!');
+            return;
+        }
+        const parts = accessToken.split('.');        
+        jwtHeaderOutput.innerText = JSON.stringify(JSON.parse(atob(parts[0])), null, 2);
+        jwtDecodedPayloadOutput.innerText = JSON.stringify(JSON.parse(atob(parts[1])), null, 2);                
+        jwtHeaderOutput.classList.remove('hidden');
+        jwtDecodedPayloadOutput.classList.remove('hidden');        
+    });
+</script>

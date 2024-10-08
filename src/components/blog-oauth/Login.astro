@@ -1,0 +1,26 @@
+---
+---
+<div id="eventDispatcher"></div>
+<button id="loginBtn" class="bg-lime-600 hover:bg-lime-500 text-white fond-bold p-4 rounded-full cursor-pointer">Klik Disini Untuk Login</button>
+<button id="forceLoginBtn" type="button" class="text-white bg-red-700 hover:bg-red-800 font-medium rounded-full p-4 text-center me-2 mb-2 cursor-pointer">Paksa Login Kembali</button>
+
+<script>
+    const redirectUrl = `${window.location.protocol}//${window.location.host}/blog/2024-10-07-cara-kerja-stateless-oauth-jwt`;       
+    document.getElementById('loginBtn')!.addEventListener('click', () => {
+        login();
+    });
+    document.getElementById('forceLoginBtn')!.addEventListener('click', () => {
+        login(true);
+    });
+
+    function login(force = false) {
+        window.location.href = `https://dev-0nhqm15bupw57vxv.us.auth0.com/authorize?` +
+            `client_id=67qa0cIIgtRh3n9S0nRC5GTdFC9ukWyk&` +
+            `redirect_uri=${redirectUrl}&` +
+            `scope=openid+email+profile&` +        
+            `response_type=code&` +
+            `audience=https://demo.jocki.me&` +
+            `state=HALAMAN_DEMO_JOCKI` +
+            (force ? "&prompt=login" : "");
+    }
+</script>
