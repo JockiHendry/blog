@@ -41,6 +41,12 @@ const requestMethodSelect = document.getElementById("requestMethodSelect") as HT
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+document.getElementById('eventDispatcher')?.addEventListener('tokenExchanged', (e) => {
+    if ((e as CustomEvent).detail?.accessToken != null) {
+        textAreaInput.value = (e as CustomEvent).detail.accessToken;
+    }    
+});
+
 executeBtn?.addEventListener('click', async () => {
     await verifyJWT();
 });
@@ -135,13 +141,19 @@ async function verifyJWT() {
     } else {
         addError(`JWT sudah kadaluarsa pada: ${new Date(payload.exp * 1000).toLocaleString()}`);
     }
-    if (requestMethodSelect.value === 'DELETE') {
-        if (payload.permissions.includes("delete:blogs")) {
-            addSuccess('Pengguna memiliki permission untuk memanggil API ini');
-        } else {
-            addError('Pengguna tidak memiliki permission untuk memanggil API ini!');
-        }
-    }    
+    if (requestMethodSelect.value === 'GET') {
+        permissionCheck(payload, 'read:blogs');
+    } else if (requestMethodSelect.value === 'DELETE') {
+        permissionCheck(payload, 'delete:blogs');
+    }            
+}
+
+function permissionCheck(payload: {permissions: string[]}, permission: string): void {
+    if (payload.permissions.includes(permission)) {
+        addSuccess('Pengguna memiliki permission untuk memanggil API ini');
+    } else {
+        addError('Pengguna tidak memiliki permission untuk memanggil API ini!');
+    }
 }
 
 function decode(input: string) {
