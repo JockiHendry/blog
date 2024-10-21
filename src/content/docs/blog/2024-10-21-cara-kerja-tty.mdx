@@ -1,0 +1,240 @@
+---
+title: Cara Kerja TTY Di Linux
+date: 2024-10-21
+tags: [Ubuntu]
+excerpt: TTY adalah istilah yang sering diasosiasikan dengan *terminal* di Linux.  Sebenarnya apa itu TTY? Secara harfiah, TTY adalah singkatan dari Teletype yang merupakan jenis perangkat keras untuk komunikasi.  Namun, karena perangkat terminal fisik jarang dipakai di PC, TTY kini adalah perangkat *teletype* semu (*virtual teletype*).  Pada tulisan ini, saya akan mencoba mencari tahu definisi TTY, PTY, `stty` dan sebagainya.
+---
+
+TTY adalah istilah yang sering diasosiasikan dengan *terminal* di Linux.  Sebenarnya apa itu TTY? Secara harfiah, TTY adalah singkatan dari Teletype yang merupakan jenis perangkat keras untuk komunikasi.  Namun, karena perangkat terminal fisik jarang dipakai di PC, TTY kini adalah perangkat *teletype* semu (*virtual teletype*).  Pada tulisan ini, saya akan mencoba mencari tahu definisi TTY, PTY, `stty` dan sebagainya.
+
+## Virtual Terminal (TTY)
+
+Untuk melihat perangkat virtual terminal yang ada di Linux, saya dapat menggunakan perintah `ls /dev/tty[0-9]*`.  Walaupun hasilnya akan ada 64 perangkat virtual terminal yang ditemukan dengan nama seperti `tty0`, `tty1`, `tty2` hingga `tty63`, saya tidak bisa memakai semuanya. Pada sistem operasi Ubuntu Desktop, saya bisa berpindah ke virtual terminal lain dengan menggunakan kombinasi seperti <kbd>CTRL</kbd> + <kbd>ALT</kbd> + <kbd>F1</kbd>.  Saya dapat mengganti <kbd>F1</kbd> dengan <kbd>F1</kbd> hingga <kbd>F12</kbd> untuk mengakses perangkat virtual terminal yang disiapkan oleh Linux.
+
+Virtual terminal pertama yang diakses dengan <kbd>F1</kbd> dipakai untuk layar login.  Virtual terminal kedua yang diakses dengan <kbd>F2</kbd> adalah *desktop* yang saya pakai sehari-hari.  Sisanya, <kbd>F3</kbd> hingga <kbd>F6</kbd> adalah virtual terminal yang berisi *login shell*.  Mereka dikelola oleh `getty` yang akan menampilkan prompt tekstual untuk login saat diakses.
+
+Lalu bagaimana dengan <kbd>F7</kbd> hingga <kbd>F12</kbd>?  Walaupun virtual terminal tersebut siap dipakai, tetapi karena tidak ada program yang dihubungkan dengan mereka, saya hanya menemukan layar kosong saat membuka virtual terminal tersebut.
+
+Untuk melihat virtual terminal yang sedang aktif, saya dapat menggunakan perintah `tty` seperti berikut ini:
+
+```shell
+$ tty
+
+# Output:
+#
+# /dev/tty3
+```
+
+Selain berpindah virtual terminal dengan *shortcut*, saya juga dapat menggunakan perintah `chvt`.  Sebagai contoh, untuk mengakses terminal 3, saya dapat menggunakan perintah seperti berikut ini:
+
+```shell
+$ sudo chvt 3
+```
+
+Saya dapat berinteraksi dengan virtual terminal melalui *redirection* ke nama perangkatnya, misalnya, untuk mengirim hasil dari perintah `top` ke terminal 10, saya dapat menggunakan perintah seperti berikut ini:
+
+```shell
+$ sudo bash -c "top > /dev/tty10"
+```
+
+Setelah menjalankan perintah di atas, bila saya berpindah ke terminal 10 dengan <kbd>CTRL</kbd> + <kbd>ALT</kbd> + <kbd>F10</kbd>, saya akan menemukan hasil perintah `top` di virtual terminal tersebut.
+
+## Pseudoterminal (PTY)
+
+Pseudoterminal hampir sama seperti virtual terminal tetapi cakupannya lebih sempit dimana ia hanya berlaku untuk proses (aplikasi) yang membuatnya.  Sistem operasi dapat membuat banyak pseudoterminal sekaligus di virtual terminal yang sedang aktif.  Sebagai contoh, bila saya membuka sebuah aplikasi *terminal* (aplikasi yang dipakai untuk memberikan perintah *shell*) di Ubuntu Desktop, ia akan mendapatkan sebuah pseudoterminal seperti yang diperlihatkan perintah berikut ini:
+
+```shell
+$ tty
+
+# Output:
+#
+# /dev/pts/1
+```
+
+Bila saya membuka aplikasi *terminal* baru tanpa menutup yang sudah ada, nilai `tty` akan berbeda lagi:
+
+```shell
+$ tty
+
+# Output:
+#
+# /dev/pts/2
+```
+
+Sama seperti pada virtual terminal, saya dapat menggunakan *redirection* untuk berinteraksi dengan pseudoterminal.  Sebagai contoh, untuk menulis ke aplikasi terminal yang pertama, saya dapat memberikan perintah:
+
+```shell
+$ echo "mengetik jarak jauh ke terminal pertama" > /dev/pts/1
+```
+
+Pseudoterminal di Ubuntu menggunakan arsitektur UNIX 98.  Pada arsitektur ini, setiap proses yang ingin membuat pseudoterminal perlu menggunakan `/dev/ptmx`  (*master clone device*) dimana ia kemudian bisa mendapatkan *slave device* (seperti `/dev/pts/1` dan `/dev/pts/2`) untuk berinteraksi dengan pseudoterminal tersebut.
+
+Pseudoterminal biasanya dipakai oleh aplikasi seperti `sshd` dan `telnet` dimana beberapa pengguna bisa login secara bersamaan dan masing-masing pengguna akan memiliki terminal pribadi mereka yang terpisah.  Untuk mensimulasikannya, saya bisa menjalankan kode program Python seperti berikut ini:
+
+```shell
+$ tty
+
+# Output:
+#
+# /dev/pts/0
+
+$ python3 -c "import pty; pty.fork()"
+
+$ tty
+
+# Output:
+#
+# /dev/pts/1
+```
+
+Kode program  `pty.fork()` di atas akan men-*fork* shell yang sedang aktif namun dengan pseudoterminal yang berbeda.  Hal ini bisa terlihat dari hasil perintah `tty` yang kini berbeda dengan sebelum perintah tersebut dijalankan.
+
+Pada sesi CTF yang mensimulasikan aktifitas *hacking*, saya sering kali perlu mendapatkan *reverse shell* berdasarkan *pipe*.  Setelah mesin target berhasil melakukan koneksi, saya dapat dapat memberikan perintah di `nc` seolah-olah saya sudah mendapatkan *shell* melalui SSH.  Namun, pada kondisi seperti ini, tidak ada pseudoterminal yang diasosiasikan pada *shell* tidak resmi tersebut.  Hal ini terlihat pada output `tty` seperti berikut ini:
+
+```shell
+$ nc -lnvp 9001
+Connection received on 10.10.10.10 56789
+$ tty
+
+# Output:
+#
+# not a tty
+#
+```
+
+Tanpa terminal, beberapa perintah seperti `sudo` dan `top` akan gagal dijalankan.  Sebagai solusi-nya, saya bisa menggunakan `pty.spawn("bash")` untuk menjalankan *shell* Bash yang sudah dilengkapi dengan pseudoterminal baru seperti yang terlihat pada perintah berikut ini:
+
+```shell
+$ nc -lnvp 9001
+Connection received on 10.10.10.10 56789
+$ tty
+
+# Output:
+# not a tty
+#
+
+$ python3 -c "import pty; pty.spawn('bash')"
+
+user@server:~$ tty
+
+# Output:
+#
+# tty
+# /dev/pts/0
+```
+
+Bagaimana bila tidak ada Python di mesin tujuan?  Saya juga dapat menggunakan `script` yang merupakan perintah bawaan Linux.  Tujuan utama dari perintah ini adalah merekam aktifitas terminal ke sebuah file untuk diputar ulang.  Namun, karena perintah `script` memberikan pseudoterminal ke proses shell saat ini sama seperti pada `pty.spawn()` di kode program Python di atas, saya bisa memanfaatkannya seperti pada contoh berikut ini:
+
+```shell
+$ nc -lnvp 9001
+Connection received on 10.10.10.10 56789
+$ tty
+
+# Output:
+# not a tty
+#
+
+$ script -E never /dev/null
+
+# Output:
+# Script started, output log file is '/dev/null'.
+# 
+
+user@server:~$ tty
+
+# Output:
+#
+# /dev/pts/0
+#
+```
+
+## stty
+
+`stty` adalah aplikasi yang dapat dipakai untuk melakukan pengaturan pada terminal baik bahwa terminal nyata, virtual terminal maupun pseudoterminal.  Saya dapat menggunakan perintah `stty -a` untuk melihat seluruh konfigurasi yang sedang aktif. Untuk hasil lebih spesifik, saya dapat langsung melewatkan opsi yang ingin dicari ke `stty`.  Sebagai contoh, untuk melihat ukuran terminal (dalam jumlah karakter), saya dapat memberikan perintah berikut ini:
+
+```shell
+$ stty size
+
+# Output:
+# 24 80
+```
+
+Pada perintah di atas, terlihat bahwa ukuran terminal saat ini adalah 24 karakter per baris dan 80 karakter per kolom.  Bila saat menggunakan `pty.spawn()`, pseudoterminal baru untuk shell ternyata memiliki ukuran yang berbeda, saya dapat mengubahnya menjadi sesuai dengan nilai di atas dengan memberikan perintah:
+
+```shell
+$ stty rows 24 columns 80
+```
+
+Saya juga dapat mengatur terminal yang berbeda (bukan yang sedang aktif saat ini) dengan menggunakan argumen `-F`.  Sebagai contoh, pada *reverse shell* saat ini, tombol seperti <kbd>↑</kbd> dan <kbd>↓</kbd> untuk riwayat perintah serta tombol <kbd>TAB ⭾</kbd> untuk *completion* tidak bekerja sama sekali.  Selain itu, bila saya menekan tombol <kbd>Ctrl</kbd>+<kbd>C</kbd>, saya akan langsung keluar dari `nc`.  Untuk mengatasinya, saya perlu mengatifkan modus `raw` di terminal lokal yang menjalankan `nc`.  Sebagai contoh, bila *reverse shell* dibuat dengan perintah berikut ini:
+
+```shell
+$ tty
+
+# Output:
+#
+# /dev/pts/2
+#
+
+$ nc -lnvp 9001
+Listening on 0.0.0.0 9001
+Connection received on 10.10.10.10 56789
+$ python3 -c "import pty; pty.spawn('bash')"
+user@server:~$ tty
+
+# Output:
+# tty
+# /dev/pts/0
+#
+```
+
+maka, pada komputer lokal, saya dapat membuka sebuah terminal baru dan memberikan perintah berikut ini:
+
+```shell
+$ stty -F /dev/pts/2 raw -echo
+```
+
+:::note
+Perhatikan bahwa target terminal-nya adalah `/dev/pts/2` yang merupakan pseudoterminal lokal dimana saya menjalankan perintah `nc`.  Saya tidak menggunakan `/dev/pts/0` yang merupakan terminal yang ada di sisi server yang dibuat oleh `pty.spawn()`.
+:::
+
+Setelah itu, kembali ke pseudoterminal di server, saya memberikan perintah berikut ini:
+
+```shell
+$ reset
+```
+
+Sekarang, pseudoterminal akan mendeteksi tombol panah, tab dan kombinasi tombol spesial lainnya sama seperti pada koneksi SSH.  Selain itu, penggunaan `-echo` juga akan menghilangkan output dari apa yang saya ketik di terminal sehingga tidak lagi terjadi duplikasi.
+
+## ioctl
+
+`stty` akan menggunakan `ioctl` untuk beberapa operasinya.  Sebagai contoh, untuk mensimulasikan `stty size` yang menampilkan ukuran terminal, saya dapat langsung memanggil `ioctl` dengan melewatkan `TIOCGWINSZ` sebagai *request code* seperti pada kode program berikut ini:
+
+```python
+import fcntl
+import struct
+import sys
+import termios
+
+
+def main():
+    s = struct.pack('HH', 0, 0)
+    t = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, s)
+    print(struct.unpack('HH', t))
+```
+
+Contoh lainnya, saya dapat menggunakan `TIOCSTI` untuk mengirim input ke sebuah terminal seolah-olah ada yang sedang mengetik di terminal tersebut dengan kode program seperti berikut ini:
+
+```python
+import fcntl
+import os
+import termios
+
+
+def main():
+    pts = os.open("/dev/pts/0", os.O_RDWR)
+    s = "whoami\n"
+    for c in s:
+        fcntl.ioctl(pts, termios.TIOCSTI, c)
+```
+
+Kode program di atas perlu dijalankan sebagai *root*.  Setelah dijalankan pada terminal berbeda, maka terminal pertama (dengan PTS 0) akan menjalankan perintah `whoami` seolah-olah ada yang mengetik perintah tersebut.
