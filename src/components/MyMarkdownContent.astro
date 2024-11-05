@@ -1,13 +1,8 @@
 ---
-import BlogMarkdownContent from 'starlight-blog/overrides/MarkdownContent.astro';
 import type { Props } from '@astrojs/starlight/props'
-import ImageZoom from 'starlight-image-zoom/components/ImageZoom.astro';
-import config from 'virtual:starlight-blog-config';
-
-const isBlogPost = Astro.props.slug.match(new RegExp(`^${config.prefix}/(?!(\\d+/?|tags/.+)$).+$`)) !== null
+import Default from "starlight-blog/overrides/MarkdownContent.astro"
+import ImageZoom from 'starlight-image-zoom/components/ImageZoom.astro'
 ---
 
-{isBlogPost ? <ImageZoom /> : null}
-<BlogMarkdownContent {...Astro.props}>
-    <slot />
-</BlogMarkdownContent>
+<ImageZoom />
+<Default {...Astro.props}><slot /></Default>
