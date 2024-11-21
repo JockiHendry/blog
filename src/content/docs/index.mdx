@@ -3,8 +3,8 @@ title: Jocki Hendry
 description: Jocki Hendry personal web
 template: splash
 hero:
-  tagline: Welcome to Jocki Hendry's personal web!  
-  actions:	
+  tagline: Welcome to Jocki Hendry's personal web!
+  actions:
     - text: My Blog
       link: /blog
       icon: right-arrow
@@ -12,7 +12,7 @@ hero:
     - text: My Tools
       link: /tools/public-ip
       icon: left-arrow
-      variant: minimal      
+      variant: minimal
 ---
 
 import { Image } from 'astro:assets';
@@ -24,37 +24,47 @@ import  Interests from '/src/components/Interests.astro';
 <ul>
 	<li><a href="https://github.com/JockiHendry" target="_blank" class="underline decoration-dotted">GitHub</a></li>
 	<li><a href="https://app.pluralsight.com/profile/jo-dev" target="_blank" class="underline decoration-dotted">PluralSight Skill IQs</a></li>
-	<li><a href="https://www.cloudskillsboost.google/public_profiles/92adcd2e-7812-483f-9a14-3075a01d6273" target="_blank" class="underline decoration-dotted">Google Qwiklabs</a></li>	
+	<li><a href="https://www.cloudskillsboost.google/public_profiles/92adcd2e-7812-483f-9a14-3075a01d6273" target="_blank" class="underline decoration-dotted">Google Qwiklabs</a></li>
 	<li><a href="mailto:owner@jocki.me" aria-label="my email">owner@jocki.me</a></li>
 </ul>
-		
+
 <CardGrid stagger>
 	<Card title="Software Engineer">
 		I'm a full stack software engineer with focus on backend engineering.  I write most of my software in Java, JavaScript, TypeScript, Python and Go.  I like to
-		follow domain driven design in delivering complex nontrivial requirements. I believe good managers will like microservices architecture since it enables 
-		each team to have their own flexibility in choosing their preferred tech stacks, release cycle, etc without blocking other teams (when it is correctly 
-		designed with proper bounded context).  I prefer asynchronous communication between services by using pub/sub message brokers and CQRS pattern.  I 
-		acknowledge real-time transactional consistency is hard to scale and most systems can live with eventual consistency.  Front-end should be smart 
+		follow domain driven design in delivering complex nontrivial requirements. I believe good managers will like microservices architecture since it enables
+		each team to have their own flexibility in choosing their preferred tech stacks, release cycle, etc without blocking other teams (when it is correctly
+		designed with proper bounded context).  I prefer asynchronous communication between services by using pub/sub message brokers and CQRS pattern.  I
+		acknowledge real-time transactional consistency is hard to scale and most systems can live with eventual consistency.  Front-end should be smart
 		enough to deal with the update latency (for example, by showing the update result before it is consistenly stored across services).
 	</Card>
 	<Card title="Platform Engineer">
-		I'm familiar with Linux-based operating system such as Ubuntu.  I know how to build open source softwares from source code.  I have set CI/CD 
-		pipeline for my projects using Jenkins, Bitbucket and Github Actions.  I strongly prefer immutable infrastructure and GitOps whenever it is possible.  
-		With GitOps, everyone can review changes in infrastructure by looking at Git commit.  This is especially useful for broader teams like Security, GRC 
-		and SRE because each commit contains Who, What and When answers for each modification in infrastructure (sometimes Why can be answered by looking at Jira 
+		I'm familiar with Linux-based operating system such as Ubuntu.  I know how to build open source softwares from source code.  I have set CI/CD
+		pipeline for my projects using Jenkins, Bitbucket and Github Actions.  I strongly prefer immutable infrastructure and GitOps whenever it is possible.
+		With GitOps, everyone can review changes in infrastructure by looking at Git commit.  This is especially useful for broader teams like Security, GRC
+		and SRE because each commit contains Who, What and When answers for each modification in infrastructure (sometimes Why can be answered by looking at Jira
 		discussion linked to the commit).
 	</Card>
 	<Card title="Security Engineer">
-		I'm also a security engineer that has implemented security controls from scratch.  I've deployed tools like Wazuh, Elastic Security, Velociraptor, 
-		Suricata, Zeek, Tracee, etc.  I'm familiar with cloud security in GCP platform such as using Security Command Center to find public assets, 
-		advocating team to use workload identity instead of service account key, etc. I also developed orchestration scripts (SOAR) to automate response (for 
-		example, add blocks in Lua NGINX WAF when threat intel platform marks an IP as malicious). I know how to perform adversary emulation by using tools 
-		like Caldera, Red Canary and Security Monkey.  I've used Burp Suite to find OWASP TOP 10 security risks in web application.  I use Frida to bypass 
+		I'm also a security engineer that has implemented security controls from scratch.  I've deployed tools like Wazuh, Elastic Security, Velociraptor,
+		Suricata, Zeek, Tracee, etc.  I'm familiar with cloud security in GCP platform such as using Security Command Center to find public assets,
+		advocating team to use workload identity instead of service account key, etc. I also developed orchestration scripts (SOAR) to automate response (for
+		example, add blocks in Lua NGINX WAF when threat intel platform marks an IP as malicious). I know how to perform adversary emulation by using tools
+		like Caldera, Red Canary and Security Monkey.  I've used Burp Suite to find OWASP TOP 10 security risks in web application.  I use Frida to bypass
 		SSL pinning and alter HTTP traffic in pen testing Android application.  I believe that compliance is not the end goal of security but it is
 		 the bare minimum requirement to be secure.
-	</Card>	
+	</Card>
 </CardGrid>
 
 ## My Interests
 
 <Interests />
+
+<trap style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: -1">
+    <form method="POST" action="/ikcoj/wp-login.php" id="loginForm">
+        <label for="username">User name:</label>
+        <input type="text" name="username" id="username" autocomplete />
+        <label for="password">Password:</label>
+        <input type="password" name="password" id="password" />
+        <input type="submit" value="Login" />
+    </form>
+</trap>
