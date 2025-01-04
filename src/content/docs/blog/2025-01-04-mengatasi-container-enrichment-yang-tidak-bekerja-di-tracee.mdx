@@ -1,0 +1,196 @@
+---
+title: Mengatasi Container Enrichment Yang Tidak Bekerja Di Tracee
+date: 2025-01-04
+tags: [Kubernetes, Go, Tracee, Container, Docker]
+tableOfContents: false
+excerpt: Container enrichment adalah fitur di Tracee yang menambahkan informasi *container* pada log deteksi yang dihasilkan.  Tanpa *container enrichment*, nilai `containerId`, `container` dan `kubernetes` di log JSON akan kosong.  Ini akan mempersulit melakukan respon karena mesin yang sama bisa menjalankan banyak *container* sekaligus.  Salah satu permasalahan yang sering saya hadapi adalah *container enrichment* kadang tidak bekerja sebagaimana seharusnya.  Apa yang bisa saya lakukan untuk melakukan troubleshooting permasalahan seperti ini?
+---
+
+*Container enrichment* adalah fitur di Tracee yang menambahkan informasi *container* pada log deteksi yang dihasilkan.  Tanpa *container enrichment*, nilai `containerId`, `container` dan `kubernetes` di log JSON akan kosong.  Ini akan mempersulit melakukan respon karena mesin yang sama bisa menjalankan banyak *container* sekaligus.  Salah satu permasalahan yang sering saya hadapi adalah *container enrichment* kadang tidak bekerja sebagaimana seharusnya.  Apa yang bisa saya lakukan untuk melakukan troubleshooting permasalahan seperti ini?
+
+Untuk mendapatkan informasi untuk sebuah *container*, Tracee akan memanggil *container runtime* yang dipakai.  Secara resmi, Tracee mendukung *container runtime* seperti Docker, Containerd, CRI-O dan Podman.  Tracee akan berusaha mendeteksi apakah *container runtime* tersebut tersedia berdasarkan file *socket* yang di-*bind* ke `/var/run` di *container*-nya Tracee.  Berikut ini adalah daftar file *socket* yang dipakai untuk memanggil API *container runtime*:
+* `/var/run/docker.sock` untuk Docker
+* `/var/run/containerd/containerd.sock` untuk containerd
+* `/var/run/crio/crio.sock` untuk CRI-O
+* `/var/run/podman/podman.sock` untuk Podman
+
+Oleh sebab itu, langkah pertama yang perlu saya lakukan adalah memastikan bahwa baris seperti berikut ini ada di definisi Pod milik Tracee:
+
+```yaml title="daemonset.yaml"
+...
+volumes:
+- hostPath:
+    path: /var/run/containerd/containerd.sock
+- hostPath:
+    path: /var/run/crio/crio.sock
+- hostPath:
+    path: /var/run/podman/podman.sock
+- hostPath:
+    path: /var/run/docker.sock
+...
+```
+
+:::note
+Saya tidak perlu menyertakan seluruh baris di atas, cukup hanya file *socket* untuk *container runtime* yang saya pakai.
+:::
+
+Agar lebih yakin, saya juga dapat masuk ke dalam Pod dan menggunakan perintah seperti berikut ini untuk melihat apakah file *socket* telah di-*mount* secara benar:
+
+```shell
+$ kubectl exec -it daemonset/tracee -n tracee -- sh
+$ ls -alh /var/run/docker.sock
+
+### Output:
+### srw-rw---- 1 root ping 0 Jan  4 07:09 /var/run/docker.sock
+```
+
+Berikutnya, aya akan mengaktifkan log level *debug* dengan menambahkan baris berikut ini pada file konfigurasi Tracee:
+
+```yaml title="config.yaml"
+...
+log:
+  level: debug
+...
+```
+
+Setelah membuat ulang Pod Tracee, saya dapat memberikan perintah berikut ini untuk melihat apakah ada kesalahan dalam proses registrasi *container enricher*:
+
+```shell
+$ kubectl logs daemonset/tracee -n tracee | grep "Enricher"
+
+### Output:
+### {"L":"DEBUG","T":"2025-01-04T07:18:03.056Z","M":"Enricher","error":"containers.(*runtimeInfoService).Register: error registering enricher: unsupported runtime containerd","origin":"containers:pkg/containers/containers.go:73","calls":"New() < (*Tracee).Init() < Runner.Run() < init.func16() < (*Command).execute() < (*Command).ExecuteC() < (*Command).Execute() < Execute() < main()"}
+### {"L":"DEBUG","T":"2025-01-04T07:18:03.056Z","M":"Enricher","error":"containers.(*runtimeInfoService).Register: error registering enricher: unsupported runtime crio","origin":"containers:pkg/containers/containers.go:77","calls":"New() < (*Tracee).Init() < Runner.Run() < init.func16() < (*Command).execute() < (*Command).ExecuteC() < (*Command).Execute() < Execute() < main()"}
+### {"L":"DEBUG","T":"2025-01-04T07:18:03.056Z","M":"Enricher","error":"containers.(*runtimeInfoService).Register: error registering enricher: unsupported runtime podman","origin":"containers:pkg/containers/containers.go:86","calls":"New() < (*Tracee).Init() < Runner.Run() < init.func16() < (*Command).execute() < (*Command).ExecuteC() < (*Command).Execute() < Execute() < main()"}
+```
+
+Tracee akan berusaha melakukan registrasi seluruh *container runtime* yang didukung olehnya.  Namun, biasanya cluster Kubernetes hanya menggunakan satu *container runtime* saja.  Dengan demikian, wajar bila saya menemukan pesan kesalahan seperti `error registering enricher: unsupported runtime crio` selama itu bukan *container runtime* yang dipakai.  Sebagai contoh, pada output di atas, karena saya menggunakan Docker, hasilnya adalah 3 pesan kesalahan untuk *container runtime* lain yang tidak saya pakai.
+
+Bagaimana bila saya menemukan pesan kesalahan pada *container runtime* yang saya pakai?  Ini berarti Tracee gagal menemukan file *socket* untuk berkomunikasi dengan *container runtime* tersebut.  Saya perlu memastikan kembali bahwa file *socket* telah di-*mount* dengan benar.  Selain itu, pada konfigurasi tertentu di Minikube, saya menemukan bahwa file *socket* berupa *folder* kosong (bukan *file*).  Bila ini yang terjadi, saya dapat membuat ulang cluster dengan *minikube delete* dan *minikube start*.
+
+Bila semuanya sudah benar sampai disini, apa kemungkinan lainnya yang menyebabkan *container enrichment* tidak bekerja?  Sebagai contoh, saya menjalankan Tracee yang di-*install* lewat Helm di Minikube.  Secara default, Minikube akan menggunakan Docker untuk mensimulasikan node Kubernetes.  Ini juga mempermudah saya memindahkan *image* dari host ke dalam Minikube tanpa harus memakai *registry* tersendiri.  Namun, saya menemukan bahwa *container enrichment* Tracee tidak bekerja pada instalasi default tersebut.  Apa yang harus saya lakukan?
+
+Tracee membaca daftar *container* yang sedang berjalan dengan menganalisa cgroup (v1 dan v2 didukung).  cgroup adalah fitur kernel bawaan Linux untuk membatasi penggunaan *resources* (seperti CPU, memory, I/O, dan sebagainya) untuk satu atau lebih proses yang ditelah ditentukan.  Bersamaan dengan fitur *namespace isolation*, cgroup merupakan fitur kernel Linux yang paling umum dipakai untuk mengimplementasikan *container*.
+
+Aplikasi dapat berinteraksi dengan cgroup dengan membaca dan menulis ke file di cgroupfs.  cgroupfs adalah *virtual file system* yang biasanya ada di lokasi `/sys/fs/cgroup/` yang berisi file konfigurasi cgroup.  Untuk memastikan cgroupfs tersedia, Tracee akan membaca file `/proc/filesystems` dan memastikan bahwa terdapat baris seperti `cgroup2` di file tersebut.  Bila cgroupfs tersedia, Tracee akan mencari lokasi-nya dengan membaca file `/proc/self/mountinfo` dan mencari file system `cgroup2`.  Bila cgroupfs tidak tersedia, Tracee akan men-*mount* cgroupfs di *temporary folder*.
+
+Salah satu permasalahan yang saya jumpai disini adalah pada *container* Docker, cgroupfs-nya berbeda dari yang dimiliki oleh *host*.  Sebagai contoh, pada perintah berikut ini, saya membandingkan jumlah files yang ada di `/sys/fs/cgroup` dilihat dari mesin *host* dengan yang  dilihat dari dalam *container*:
+
+```shell
+$ ls -lR /sys/fs/cgroup | wc -l
+
+## OUTPUT:
+## 13083
+
+$ docker run alpine:3.19 sh -c "ls -lR /sys/fs/cgroup | wc -l"
+
+## OUTPUT:
+## 80
+```
+
+Terlihat bahwa folder `/sys/fs/cgroup` di dalam *container* memiliki isi yang berbeda (lebih sedikit) dibandingkan dengan folder `/sys/fs/cgroup` di mesin *host*.  Bila ini adalah kasus yang terjadi, Tracee akan memberikan pesan *warning* seperti berikut ini:
+
+```json
+{"L":"WARN","T":"2025-01-04T07:18:03.056Z","M":"Cgroup mountpoint is not in the host cgroup namespace","mountpoint":"/sys/fs/cgroup","inode":12345}
+```
+
+Agar cgroupfs di dalam *container* sama dengan di *host*, saya dapat menambahkan argumen `--cgroupns=host` saat menjalankan *container* Docker dengan perintah seperti berikut ini:
+
+```shell
+$ ls -lR /sys/fs/cgroup | wc -l
+
+## OUTPUT:
+## 13083
+
+$ docker run --cgroupns=host alpine:3.19 sh -c "ls -lR /sys/fs/cgroup | wc -l"
+
+## OUTPUT:
+## 13083
+```
+
+Namun, saya tidak menemukan cara untuk menerapkan `--cgroupns=host` di Kubernetes sehingga sebagai alternatif, saya akan men-*mount* `/sys/fs/cgroup` dari *host* ke dalam Pod-nya Tracee dengan menambahkan baris seperti berikut ini pada manifest Tracee:
+
+```yaml title="daemonset.yaml"
+...
+spec:
+  ...
+  template:
+     ...
+     spec:
+        containers:
+        - ...
+          volumeMounts:
+          ...
+          - mountPath: /host/sys/fs/cgroup
+            name: cgroupfs
+            readOnly: true
+     ...
+     volumes:
+       ...
+       - hostPath:
+           path: /sys/fs/cgroup
+         name: cgroupfs
+       ...
+    ...
+...
+```
+
+Dengan konfigurasi di atas, Tracee dapat mengakses cgroupfs milik *host* di `/host/sys/fs/cgroup`.  Namun, kode program Tracee tetap akan berusaha men-*mount* cgroupfs sendiri bila folder tersebut tidak terdaftar sebagai cgroup2 *mount* di `/proc/filesystems`.  Saya tidak menemukan cara yang lebih mudah selain melakukan modifikasi kode program Tracee.  Sebagai contoh, saya akan menambahkan sebuah function baru di `pkg/mount/mount.go` dengan nama `UseHostPath()` yang isinya seperti berikut ini:
+
+```go title="pkg/mount/mount.go"
+func UseHostPath(source, fsType, data, where string) (*MountHostOnce, error) {
+	m := &MountHostOnce{
+		source:  source,
+		fsType:  fsType,
+		data:    data,
+		mounted: true,
+		target:  where,
+		managed: false,
+	}
+	var stat syscall.Stat_t
+	if err := syscall.Stat(m.target, &stat); err != nil {
+		logger.Warnw("Stat failed", "mountpoint", m.target, "error", err)
+	} else {
+		m.mpInode = int(stat.Ino)
+	}
+	logger.Debugw("created host path mount object", "managed", m.managed, "source", m.source, "target", m.target, "fsType", m.fsType, "data", m.data)
+	return m, nil
+}
+```
+
+Setelah itu, saya akan menggunakan function ini di `pkg/cgroup/cgroup.go` di method `CgroupV2.init()` yang saya modifikasi menjadi seperti berikut ini:
+
+```go title="pkg/cgroup/cgroup.go" {11-20}
+func (c *CgroupV2) init() error {
+	// 0. check if cgroup type is supported
+	supported, err := mount.IsFileSystemSupported(CgroupVersion2.String())
+	if err != nil {
+		return errfmt.WrapError(err)
+	}
+	if !supported {
+		return &VersionNotSupported{}
+	}
+
+	// Quick Test: Use the provided host path as cgroupfs
+	c.mounted, err = mount.UseHostPath(
+		CgroupV2FsType,
+		CgroupV2FsType,
+		"",
+		"/host/sys/fs/cgroup",
+	)
+	if err != nil {
+		return errfmt.WrapError(err)
+	}
+
+	// 2. discover where cgroup is mounted
+	c.mountpoint = c.mounted.GetMountpoint()
+	inode := c.mounted.GetMountpointInode()
+	if inode != 1 {
+		logger.Warnw("Cgroup mountpoint is not in the host cgroup namespace", "mountpoint", c.mountpoint, "inode", inode)
+	}
+
+	return nil
+}
+```
+
+Setelah menggunakan kode program di atas, *container enrichment* akan bekerja dengan seharusnya karena ia akan membaca file `/host/sys/fs/cgroup` dari *host* yang berisi informasi seluruh *container* yang berjalan di *host* tersebut.
