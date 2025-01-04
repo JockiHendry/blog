@@ -1,7 +1,7 @@
 ---
 title: Mematikan Pod Secara Otomatis Saat Tracee Mendeteksi Bahaya
 date: 2024-11-08
-tags: [Kubernetes, Go]
+tags: [Kubernetes, Go, Tracee]
 excerpt: Pada suatu hari, saya membaca tentang proyek [falco-talon](https://github.com/falcosecurity/falco-talon) yang disebut sebagai Response Engine untuk threats di Kubernetes.  Saya sudah pernah memakai [falco](https://github.com/falcosecurity/falco) untuk mendeteksi keanehan pada setiap Pod yang berjalan di Kubernetes. Dengan `falco-talon`, setiap *alert* dari `falco` dapat diubah menjadi respon otomatis seperti men-*kill* (mematikan) Pod bersangkutan, meng-isolasi *cluster* dengan fitur *cordon* dari Kubernetes, dan sebagainya.  Lalu bagaimana bila saya menggunakan [Tracee](https://github.com/aquasecurity/tracee)?  Terinspirasi oleh `falco-talon`, saya akan mencoba menambahkan fasilitas respon otomatis yang akan men-*kill* Pod berdasarkan *alert* dari Tracee.  Karena biasanya Pod dikelola oleh Deployment, Kubernetes akan membuat ulang Pod yang di-*kill* secara otomatis, sehingga operasi ini relatif aman....
 ---
 
