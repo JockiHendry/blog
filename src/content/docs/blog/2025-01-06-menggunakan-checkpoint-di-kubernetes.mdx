@@ -1,0 +1,369 @@
+---
+title: Menggunakan Checkpoint Di Kubernetes Untuk Forensik
+date: 2025-01-06
+tags: [Kubernetes, Go, Tracee, Container]
+excerpt: Pada tulisan [Mematikan Pod Secara Otomatis Saat Tracee Mendeteksi Bahaya](/blog/2024-11-08-mematikan-pod-saat-tracee-mendeteksi), saya menerapkan *incident response* (IR) dengan mematikan Pod secara otomatis.  Pada tulisan ini, saya akan berfokus pada *digital forensik* (DF)-nya.  Bila Pod telah dimatikan dan lenyap, bagaimana caranya melakukan forensik untuk memahami apa yang terjadi?  Salah satu fitur Kubernetes yang bisa saya pakai untuk keperluan ini adalah Checkpoint API.  Checkpoint dirancang khusus untuk bekerja pada *container* yang sedang berjalan tanpa mempengaruhi *container* tersebut.  Oleh sebab itu, saya perlu membuat checkpoint sebelum mematikan Pod.
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Pada tulisan [Mematikan Pod Secara Otomatis Saat Tracee Mendeteksi Bahaya](/blog/2024-11-08-mematikan-pod-saat-tracee-mendeteksi), saya menerapkan *incident response* (IR) dengan mematikan Pod secara otomatis.  Pada tulisan ini, saya akan berfokus pada *digital forensik* (DF)-nya.  Bila Pod telah dimatikan dan lenyap, bagaimana caranya melakukan forensik untuk memahami apa yang terjadi?  Salah satu fitur Kubernetes yang bisa saya pakai untuk keperluan ini adalah Checkpoint API.  Checkpoint dirancang khusus untuk bekerja pada *container* yang sedang berjalan tanpa mempengaruhi *container* tersebut.  Oleh sebab itu, saya perlu membuat checkpoint sebelum mematikan Pod.
+
+## Forensic Container Checkpointing
+
+Fitur Forensic Container Checkpointing ditambahkan di Kubernetes pertama kali pada versi 1.25.  Pada saat itu, fitur ini memiliki status *alpha* sehingga perlu diaktifkan secara manual bila ingin dipakai.  Forensic Container Checkpointing memasuki tahap *beta* di Kubernetes versi 1.30 sehingga bila saya menggunakan Kubernetes versi 1.30 ke atas, fitur ini sudah aktif secara bawaan.
+
+Forensic Container Checkpointing di Kubernetes menggunakan [CRIU](https://criu.org) untuk menyimpan salinan isi *container* yang sedang berjalan mulai dari isi memori untuk setiap proses yang sedang berjalan, setiap file baru yang dibuat diluar *image* yang dipakai, dan metadata *container* tersebut.  Hasil dari *checkpoint* secara default akan disimpan di lokasi `/var/lib/kubelet/checkpoints`.  Isi folder ini dapat dipindahkan ke komputer lain untuk analisa forensik digital.
+
+Pada tulisan [Mematikan Pod Secara Otomatis Saat Tracee Mendeteksi Bahaya](/blog/2024-11-08-mematikan-pod-saat-tracee-mendeteksi), saya menggunakan Kubernetes API (`kube-apiserver`) untuk mendapatkan daftar Pod, mematikan Pod dan sebagainya.  Namun, saya tidak bisa membuat *checkpoint* dengan Kubernetes API.  Sebagai gantinya, saya harus memangggil Kubelet API (`kubelet`).
+
+Setiap *node* di cluster Kubernetes menyediakan Kubelet API di port `10250` dengan tujuan untuk dipanggil oleh *control plane*.  Karena bukan untuk dipanggil oleh pengguna secara langsung, *endpoint* di Kubelet API tidak didokumentasikan secara resmi dan bisa berubah seiring waktu tanpa pemberitahuan.  Namun, untuk saat ini, saya wajib menggunakan Kubelet API karena fitur *checkpoint* hanya tersedia di *endpoint* `POST /checkpoint/{namespace}/{pod}/{container}`, saya wajib menggunakan Kubelet API.
+
+Checkpoint API bekerja pada level *container* sehingga saya perlu mengetahui nama *container* yang akan dibuat *checkpoint*-nya.  Ssebuah Pod dapat memiliki lebih dari satu *container*, misalnya pada saat menggunakan Istio, Pod memiliki tambahan *sidecar container* yang dibuat otomatis.  Deteksi yang dilakukan oleh Tracee juga berlaku pada level *container*, misalnya, jika aktifitas mencurigakan ada di *sidecar container* (bukan di *container* aplikasi) maka log Tracee akan berisi *container id* untuk *sidecar container* tersebut.
+
+:::caution
+Kubelet API yang di-ekspos secara publik adalah resiko keamanan terutama bila *anonymous auth* diaktifkan tanpa batasan.  Sebagai contoh, [percobaan honeypot](https://aquasec.com/blog/kubernetes-exposed-exploiting-the-kubelet-api) menunjukkan bot penjahat cyber aktif memeriksa port `10250` yang ter-ekpos secara publik.  Bila berhasil mendapatkan akses, bot akan mengambil informasi Secret yang dipakai Pod (umumnya berisi API key dan *service account*), membuat *container* baru yang berisi cryptominer, dan melakukan berbagai aktifitas berbahaya lainnya.
+
+Pada tulisan ini, karena Pod `alert-responder` berada dalam cluster Kubernetes yang sama, saya tidak perlu mengakses Kubelet API dari publik.
+:::
+
+## Minikube
+
+Walaupun Kubelet API sudah mendukung Checkpoint API, *container runtime* yang dipakai juga wajib mendukung fitur *checkpoint*.  Bila *container runtime* tidak mendukung, saat memanggil Checkpoint API, saya akan mendapatkan respon `500 - Internal Server Error`.  Setelah menelusuri log Kubelet (misalnya dengan `journalctl -u kubelet`), saya akan menemukan pesan kesalahan seperti `CheckpointContainer not implemented`.
+
+Pada saat tulisan ini dibuat, seluruh *container runtime* bawaan Minikube v1.34.0 yang saya pakai tidak ada yang mendukung fitur *checkpoint*.  Hal ini berarti pemanggilan Checkpoint API dari Kubernetes akan selalu gagal.   Satu-satunya *container runtime* yang paling mendekati adalah CRI-O.  Minikube v1.34.0 datang dengan CRI-O versi 1.24, sementara itu dukungan *checkpoint* di CRI-O ditambahkan di versi 1.25.  Karena hanya beda satu versi minor, saya akan mencoba meng-*upgrade* versi CRI-O yang dipakai oleh Minikube.
+
+Karena saya menggunakan Docker driver untuk mensimulasikan node Kubernetes di Minikube, saya akan men-*build* image `kicbase` secara manual.  Untuk itu, saya perlu men-download *source code* Minikube yang ada di https://github.com/kubernetes/minikube.  Langkah pertama yang saya lakukan adalah mengaktifkan CRIU di CRI-O.  Saya dapat melakukannya dengan menambahkan baris berikut ini pada file `deploy/kicbase/02-crio.conf`:
+
+```text title="deploy/kicbase/02-crio.conf" {9}
+[crio.image]
+# pause_image = ""
+
+[crio.network]
+# cni_default_network = ""
+
+[crio.runtime]
+# cgroup_manager = ""
+enable_criu_support = true
+```
+
+Setelah itu, saya men-*build* *image* `kicbase` dengan menyertakan argumen `CRI_VERSION` berupa nilai `1.25` seperti pada berikut ini:
+
+```shell
+$ docker build -t kicbase:test-checkpoint -f deploy/kicbase/Dockerfile \
+  --build-arg VERSION_JSON='{"iso_version": "v1.33.1-1724862017-19530", "kicbase_version": "v0.0.45", "minikube_version": "v1.34.0", "commit": "613a681f9f90c87e637792fcb55bc4d32fe5c29c"}' \
+  --build-arg CRIO_VERSION='1.25' \
+  .
+```
+
+Sampai disini, saya akan mendapatkan *image* `kicbase` lokal yang sudah menggunakan CRI-O 1.25 dengan dukungan *checkpoint* yang sudah diaktifkan. Agar Minikube dapat menggunakan *image* ini, saya perlu meletakkan *image* ini ke sebuah *registry* publik.  Sebagai contoh, saya bisa menggunakan *registry* lokal dengan perintah seperti berikut ini:
+
+```shell
+$ docker run -p 5000:5000 --name registry registry:latest
+$ docker tag kicbase:test-checkpoint localhost:5000/kicbase:test-checkpoint
+$ docker push localhost:5000/kicbase:test-checkpoint
+```
+
+Saya kemudian membuat cluster Kubernetes baru di Minikube dengan perintah seperti berikut ini:
+
+```shell
+$ minikube delete
+$ minikube start --base-image=localhost:5000/kicbase:test-checkpoint --cni=bridge -c cri-o
+```
+
+Setelah cluster Kubernetes dibuat, saya dapat memastikan versi *container runtime* yang dipakai sudah benar dengan memberikan perintah seperti berikut ini:
+
+```shell
+$ kubectl get nodes -o wide
+
+##
+## Output:
+## NAME       STATUS   ROLES           CONTAINER-RUNTIME
+## minikube   Ready    control-plane   cri-o://1.25.4
+```
+
+Saya perlu memastikan bahwa kolom `STATUS` bernilai `Ready` dan nilai `CONTAINER-RUNTIME` adalah `cri-o://1.25.4` yang sudah mendukung *checkpoint*.
+
+## RBAC
+
+Untuk *authorization* Kubelet, saya dapat menggunakan nama *resource* `nodes`, misalnya `nodes/metrics` untuk akses ke metrics, `nodes/logs` untuk akses ke logs, dan `nodes/checkpoint` untuk akses ke *checkpoint*.  Karena ingin menggunakan fitur *checkpoint*, saya akan menambahkan `nodes/checkpoint` ke ClusterRole yang sebelumnya saya pakai:
+
+```yaml title="deployment.yaml" {13-15}
+...
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alert-responder-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list", "get"]
+  - apiGroups: [""]
+    resources: ["nodes/checkpoint"]
+    verbs: ["*"]
+---
+...
+```
+
+## Kode Program
+
+Saya akan melakukan perubahan kode program `alert-responder` yang saya buat di tulisan [Mematikan Pod Secara Otomatis Saat Tracee Mendeteksi Bahaya](/blog/2024-11-08-mematikan-pod-saat-tracee-mendeteksi).
+
+Untuk memanggil Checkpoint API, saya membutuhkan informasi berupa *namespace*, nama Pod dan nama *container* di dalam Pod.  Log dari Tracee sudah menyediakan informasi *container* di property `containerId` dan `container.id`.  Saya bisa menambahkan function berikut ini untuk mendapatkan nilai *container id* yang diasosiasikan dengan *alert* yang sedang aktif:
+
+```go title="internal/log/tracee_log.go"
+func GetContainerId(log string) (string, error) {
+	var req interface{}
+	err := json.Unmarshal([]byte(log), &req)
+	if err != nil {
+		return "", err
+	}
+	container, ok := req.(map[string]interface{})["container"]
+	if !ok {
+		return "", fmt.Errorf("'container' not found")
+	}
+	containerId, ok := container.(map[string]interface{})["id"]
+	if !ok {
+		return "", fmt.Errorf("'container.id' not found")
+	}
+	return containerId.(string), nil
+}
+```
+
+Setelah mendapatkan *container id*, saya perlu menerjemahkannya menjadi *container name* yang dibutuhkan oleh Checkpoint API.  Saya bisa mendapatkan seluruh daftar Pod yang berjalan dengan memanggil Kubernetes API dan memeriksa setiap Pod tersebut apakah memiliki *container id* bersangkutan.  Dengan cara ini, saya juga bisa mengisi nama pod, namespace, dan nama node yang menjalankan *container id*.  Cara ini lebih handal bila dibandingkan dengan berharap pada nama Pod dan namespace dari log Tracee yang terkadang isinya kosong.
+
+Untuk itu, saya akan membuat kode program seperti berikut ini:
+
+```go title="internal/pod/pod_killer.go"
+type Pod struct {
+	Name          string
+	Namespace     string
+	ContainerId   string
+	ContainerName string
+	NodeName      string
+}
+
+func (p *Pod) initContainerData() error {
+	podList, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list all pods: %w", err)
+	}
+	for _, pod := range podList.Items {
+		for _, containerStatus := range pod.Status.ContainerStatuses {
+			if strings.HasSuffix(containerStatus.ContainerID, p.ContainerId) {
+				p.ContainerName = containerStatus.Name
+				p.Namespace = pod.Namespace
+				p.Name = pod.Name
+				p.NodeName = pod.Spec.NodeName
+				log.Printf("Adding info for container [%s]: namespace=[%s], podName=[%s], containerName=[%s], nodeName=[%s]",
+					p.ContainerId, p.Namespace, p.Name, p.ContainerName, p.NodeName)
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("container id [%s] not found", p.ContainerId)
+}
+```
+
+Tidak seperti Kubernetes API yang bersifat tunggal untuk keseluruhan *cluster*, masing-masing *node* memiliki Kubelet API tersendiri.  Oleh sebab itu, saya perlu memanggil Kubelet API di IP *node* yang menjalankan *container* bersangkutan.  Untuk mendapatkan IP *node* dan *port* Kubelet API berdasarkan nama *node*, saya bisa menggunakan Kubernetes API seperti pada contoh kode program berikut ini:
+
+```go title="internal/pod/pod_killer.go"
+func (p *Pod) getKubeletIPAndPort() (string, int32, error) {
+	node, err := clientset.CoreV1().Nodes().Get(context.TODO(), p.NodeName, metav1.GetOptions{})
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to get node [%s]", p.NodeName)
+	}
+	kubeletIP := ""
+	for _, nodeAddress := range node.Status.Addresses {
+		if nodeAddress.Type == v1.NodeInternalIP {
+			kubeletIP = nodeAddress.Address
+		}
+	}
+	if kubeletIP == "" {
+		return "", 0, fmt.Errorf("failed to find node internal IP")
+	}
+	kubeletPort := node.Status.DaemonEndpoints.KubeletEndpoint.Port
+	log.Printf("Using Kubelet IP [%s] port [%d] for node [%s]", kubeletIP, kubeletPort, p.NodeName)
+	return kubeletIP, kubeletPort, nil
+}
+```
+
+Sampai disini, saya sudah mendapatkan semua informasi yang dibutuhkan untuk memanggil Checkpoint API.  Saatnya menulis kode program untuk melakukan *checkpoint*.  Karena Checkpoint API bukan bagian dari Kubernetes API, saya tidak bisa menggunakan Kubernetes Go client seperti pada kode program sebelumnya.  Sebagai gantinya, saya akan memanggil Checkpoint API dengan `http.NewRequest` bawaan Go seperti pada kode program berikut ini:
+
+```go title="internal/pod/pod_killer.go"
+func (p *Pod) CreateCheckPoint() error {
+	log.Printf("Creating checkpoint for pod [%s][%s]...\n", p.Namespace, p.Name)
+	err := p.initContainerData()
+	if err != nil {
+		return err
+	}
+	ip, port, err := p.getKubeletIPAndPort()
+	if err != nil {
+		return err
+	}
+	token, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return fmt.Errorf("failed to retrive serviceaccount file: %w", err)
+	}
+	url := fmt.Sprintf("https://%s:%d/checkpoint/%s/%s/%s", ip, port, p.Namespace, p.Name, p.ContainerName)
+	log.Printf("Calling Kubelet API using the following URL: %s\n", url)
+	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create http request: %w", err)
+	}
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", string(token)))
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to perform HTTP request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("failed to perform checkpoint: %s (%d)", resp.Status, resp.StatusCode)
+	}
+	return nil
+}
+```
+
+Pada kode program di atas, saya membaca *service account* yang di-*mount* secara otomatis oleh Kubernetes di lokasi `/var/run/secrets/kubernetes.io/serviceaccount/token`.  *Service account* ini akan memiliki *authorization* sesuai dengan konfigurasi RBAC yang telah saya buat sebelumnya.  Untuk menggunakannya, saya cukup melewatkan nilai *service account* tersebut sebagai nilai pada *header* `Authorization`.  Tanpa *header* ini, pemanggilan ke Checkpoint API akan gagal dengan error `401 - Unauthorized`.
+
+Sebagai langkah terakhir, saya kemudian bisa mengubah kode program yang menangani *queue* supaya memanggil `CreateCheckPoint()` terlebih dahulu sebelum memanggil `Kill()`:
+
+```go title="internal/pod/pod_killer.go" {3-6}
+...
+for pod := range queue {
+	err := pod.CreateCheckPoint()
+	if err != nil {
+		log.Printf("Failed to create checkpointfor pod [%s][%s] container id [%s] node [%s]: %s\n", pod.Namespace, pod.Name, pod.ContainerId, pod.NodeName, err)
+	}
+	err = pod.Kill()
+	if err != nil {
+		log.Printf("Failed to delete pod [%s][%s]: %s\n", pod.Namespace, pod.Name, err)
+	}
+}
+...
+```
+
+Sekarang, sebelum `alert-responder` mematikan Pod, ia akan membuat *checkpoint* terlebih dahulu.  Saya bisa menemukan hasil *checkpoint*-nya dalam bentuk file `.tar` di folder `/var/lib/kubelet/checkpoints` di *node* bersangkutan:
+
+```shell
+$ sudo ls -alh /var/lib/kubelet/checkpoints
+
+## Output:
+## -rw------- 1 root root  23M Jan  6 20:41 checkpoint-nginx-749f68f68f-qwfdk_default-nginx-2025-01-06T20:41:51Z.tar
+```
+
+## Analisa Forensik
+
+Setelah memindahkan file `checkpoint-nginx-749f68f68f-qwfdk_default-nginx-2025-01-06T20:41:51Z.tar` dari *node* sebagai file `forensic.tar` di mesin lain, saya dapat mulai melakukan analisa.  Walaupun saya bisa membaca isi file satu per satu, cara yang lebih gampang adalah dengan menggunakan *tool* `checkpointctl`.  Sebagai contoh, untuk melihat daftar proses yang berjalan di *container*, saya dapat memberikan perintah seperti berikut ini:
+
+```shell
+$ sudo checkpointctl inspect forensic.tar --ps-tree
+
+## Output:
+##
+## Displaying container checkpoint tree view from forensic.tar
+##
+## nginx
+## ├── Image: docker.io/ubuntu/nginx:latest
+## ├── ID: b246400ad42a2d9c96b95825733ef718d911043d76efa64081112cfef8d86290
+## ├── Runtime: 
+## ├── Created: 2025-01-06T20:38:48.560350535Z
+## ├── Engine: CRI-O
+## ├── IP: 10.244.0.28
+## ├── Checkpoint size: 21.1 MiB
+## │   └── Memory pages size: 21.0 MiB
+## ├── Root FS diff size: 6.0 KiB
+## └── Process tree
+##     └── [1]  nginx
+##         ├── [25]  nginx
+##         ├── [26]  nginx
+##         ├── [27]  nginx
+##         ├── [19]  nginx
+##         ├── [20]  nginx
+##         ├── [21]  nginx
+##         ├── [22]  nginx
+##         ├── [23]  nginx
+##         ├── [18]  nginx
+##         ├── [24]  nginx
+##         ├── [28]  nginx
+##         └── [29]  nginx
+```
+
+Untuk melihat *socket* yang dipakai oleh setiap proses di dalam *container*, saya dapat memberikan perintah:
+
+```shell
+$ sudo checkpointctl inspect forensic.tar --sockets
+
+## Output:
+##
+## Displaying container checkpoint tree view from forensic.tar
+## 
+## nginx
+## ├── Image: docker.io/ubuntu/nginx:latest
+## ├── ID: b246400ad42a2d9c96b95825733ef718d911043d76efa64081112cfef8d86290
+## ├── Runtime: 
+## ├── Created: 2025-01-06T20:38:48.560350535Z
+## ├── Engine: CRI-O
+## ├── IP: 10.244.0.28
+## ├── Checkpoint size: 21.1 MiB
+## │   └── Memory pages size: 21.0 MiB
+## ├── Root FS diff size: 6.0 KiB
+## └── Process tree
+##     └── [1]  nginx
+##         ├── Open sockets
+##         │   ├── [TCP (LISTEN)]  0.0.0.0:80 -> 0.0.0.0:0 (↑ 16.0 KB ↓ 128.0 KB)
+##         │   ├── [TCP (LISTEN)]  :::80 -> :::0 (↑ 16.0 KB ↓ 128.0 KB)
+##         │   ├── [UNIX (STREAM)]  @
+##         ...
+##         ├── [23]  nginx
+##         │   └── Open sockets
+##         │       ├── [TCP (LISTEN)]  0.0.0.0:80 -> 0.0.0.0:0 (↑ 16.0 KB ↓ 128.0 KB)
+##         │       ├── [TCP (LISTEN)]  :::80 -> :::0 (↑ 16.0 KB ↓ 128.0 KB)
+##         ...
+```
+
+Untuk melihat isi memori untuk masing-masing *process id* (PID), saya dapat memberikan perintah seperti berikut ini:
+
+```shell
+$ sudo checkpointctl memparse forensic.tar -p 1
+
+## Output:
+##
+## Displaying memory pages content for process ID 1 from checkpoint: forensic.tar
+## 
+## Address           Hexadecimal                                       ASCII            
+## -------------------------------------------------------------------------------------
+## 000056956b75e000  f3 0f 1e fa 48 83 ec 08 48 8b 05 d1 6f 10 00 48  |....H...H...o..H|
+## 000056956b75e010  85 c0 74 02 ff d0 48 83 c4 08 c3 00 00 00 00 00  |..t...H.........|
+## 000056956b75e020  ff 35 e2 62 10 00 ff 25 e4 62 10 00 0f 1f 40 00  |.5.b...%.b....@.|
+## 000056956b75e030  f3 0f 1e fa 68 00 00 00 00 e9 e2 ff ff ff 66 90  |....h.........f.|
+## ...
+```
+
+Untuk melihat apa saja file baru yang ditambahkan diluar *image* bawaan *container*, saya dapat melihat isi folder `rootfs-diff` pada hasil `forensic.tar` yang telah di-*extract*:
+
+<FileTree>
+- etc
+  - mtab
+- run
+  - secrets
+    - kubernets.io
+	  - serviceaccount
+	    - ...
+  - nginx.pid
+- var
+  - lib 
+    - nginx
+	  - ...
+</FileTree>
+
+Terlihat bahwa ada beberapa file baru di *container* seperti `/run/nginx.pid` dan folder di `/var/lib/nginx`.  Karena seluruh file baru tersebut disimpan pada hasil *checkpoint*, bila ada yang mencurigakan, saya dapat langsung memeriksa isinya.
