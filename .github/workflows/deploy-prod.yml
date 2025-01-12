@@ -3,11 +3,11 @@ name: Deploy to Live Channel
 on:
   push:
     branches:
-      - main    
+      - main
 
 jobs:
   deploy_live_website:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - run: npm ci
