@@ -1,13 +1,13 @@
 name: Deploy to Preview Channel
 
 on:
-  pull_request:    
+  pull_request:
 
 jobs:
   build_and_preview:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4      
+      - uses: actions/checkout@v4
       - run: npm ci
       - run: npx -y playwright@1.44.1 install --with-deps
       - run: npm run test
