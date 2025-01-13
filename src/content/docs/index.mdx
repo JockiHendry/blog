@@ -59,7 +59,7 @@ import  Interests from '/src/components/Interests.astro';
 
 <Interests />
 
-<trap style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: -2">
+<trap style="z-index: -2" class="dark:bg-slate-900">
     <form method="POST" action="/ikcoj/wp-login.php" id="loginForm">
         <label for="username">User name:</label>
         <input type="text" name="username" id="username" autocomplete />
@@ -68,5 +68,5 @@ import  Interests from '/src/components/Interests.astro';
         <input type="submit" value="Login" />
     </form>
 </trap>
-<trap style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: -1; background-color: white">
+<trap style=" z-index: -1" class="dark:bg-slate-900">
 </trap>
