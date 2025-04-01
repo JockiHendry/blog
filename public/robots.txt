@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jocki.me/sitemap-index.xml

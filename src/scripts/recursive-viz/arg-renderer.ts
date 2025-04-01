@@ -302,7 +302,7 @@ export class TreeArgRenderer implements ArgRenderer<BinaryTreeNode> {
         }
     }
 
-    render(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
+    render(ctx: CanvasRenderingContext2D, x: number, y: number, _: number): void {
         this.renderNode(ctx, this.root, x, y);
     }
 

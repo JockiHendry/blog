@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm ci
-      - run: npx -y playwright@1.44.1 install --with-deps
+      - run: npx -y playwright@1.51.1 install --with-deps chromium
       - run: npm run test
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:

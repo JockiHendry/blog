@@ -8,6 +8,7 @@ import starlightImageZoom from 'starlight-image-zoom';
 import serviceWorkerIntegration from './src/integrations/serviceWorker';
 import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
+import sitemap from '@astrojs/sitemap';
 
 
 // https://astro.build/config
@@ -27,23 +28,26 @@ export default defineConfig({
         }
       }],
       customCss: ['@fontsource/roboto', './src/styles/custom.scss'],
-      plugins: [starlightBlog(), starlightImageZoom()],
+      plugins: [starlightBlog({recentPostCount: 20}), starlightImageZoom()],
       expressiveCode: {
         themes: ['github-light', 'github-dark']
       },
       components: {
         MarkdownContent: './src/components/MyMarkdownContent.astro'
       }
-    }), 
-    mdx(),     
+    }),
+    mdx(),
     tailwind({
       applyBaseStyles: false,
     }),
     serviceWorkerIntegration(),
+    sitemap({
+      filter: (page) => isNaN(page.split('/').pop())
+    }),
   ],
   markdown: {
     remarkPlugins: [remarkMath],
     rehypePlugins: [[rehypeMermaid, {strategy: "img-svg"}], rehypeKatex],
   },
-  trailingSlash: 'never',  
+  trailingSlash: 'never',
 });

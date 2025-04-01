@@ -1,10 +1,9 @@
 ---
 import BlogMarkdownContent from 'starlight-blog/overrides/MarkdownContent.astro';
-import type { Props } from '@astrojs/starlight/props'
 import ImageZoom from 'starlight-image-zoom/components/ImageZoom.astro';
-import config from 'virtual:starlight-blog-config';
 
-const isBlogPost = Astro.props.slug.match(new RegExp(`^${config.prefix}/(?!(\\d+/?|tags/.+)$).+$`)) !== null
+const { posts } = Astro.locals.starlightBlog;
+const isBlogPost = posts.some(post => Astro.url.href.endsWith(post.href));
 ---
 
 {isBlogPost ? <ImageZoom /> : null}
