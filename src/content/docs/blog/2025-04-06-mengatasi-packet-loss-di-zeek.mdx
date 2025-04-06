@@ -1,0 +1,39 @@
+---
+title: Mengatasi Capture Loss Di Zeek
+date: 2025-04-06
+tags: [Zeek, Ubuntu]
+tableOfContents: false
+excerpt: Pada suatu hari, saya melakukan instalasi Zeek untuk melakukan *monitoring* jaringan.  Seperti biasanya, saya menggunakan Filebeat untuk mengirim log Zeek yang ada di `/opt/zeek/logs` ke ElasticSearch.  Setelah itu, saya membuat visualisasi di Kibana untuk mempermudah memahami hasil tangkapan Zeek tersebut.  Semuanya terlihat lancar karena saya bisa melihat aktifitas jaringan muncul di Kibana.  Setelah beberapa hari, saya baru menyadari ada yang salah saat melihat isi file `capture_loss.log`.  Nilai `percent_lost`-nya cukup tinggi hingga mencapai 60% yang menunjukkan bahwa Zeek mendeteksi banyak ACK yang tidak berurut.  Nilai ACK pada protokol TCP selalu bertambah satu untuk setiap *packet* baru.  Bila nilai yang diterima Zeek yang tidak berurut, ini berarti ada *packet* yang gagal dilihat Zeek.  Selain itu, pada `reporter.log`, saya menemukan pesan seperti `Your interface is likely receiving invalid TCP and UDP checksums, most likely from NIC checksum offloading.`....
+---
+
+Pada suatu hari, saya melakukan instalasi Zeek untuk melakukan *monitoring* jaringan.  Seperti biasanya, saya menggunakan Filebeat untuk mengirim log Zeek yang ada di `/opt/zeek/logs` ke ElasticSearch.  Setelah itu, saya membuat visualisasi di Kibana untuk mempermudah memahami hasil tangkapan Zeek tersebut.  Semuanya terlihat lancar karena saya bisa melihat aktifitas jaringan muncul di Kibana.  Setelah beberapa hari, saya baru menyadari ada yang salah saat melihat isi file `capture_loss.log`.  Nilai `percent_lost`-nya cukup tinggi hingga mencapai 60% yang menunjukkan bahwa Zeek mendeteksi banyak ACK yang tidak berurut.  Nilai ACK pada protokol TCP selalu bertambah satu untuk setiap *packet* baru.  Bila nilai yang diterima Zeek yang tidak berurut, ini berarti ada *packet* yang gagal dilihat Zeek.  Selain itu, pada `reporter.log`, saya menemukan pesan seperti `Your interface is likely receiving invalid TCP and UDP checksums, most likely from NIC checksum offloading.`.
+
+Secara umum, ada banyak penyebab kenapa *packet* bisa gagal diterima oleh Zeek.  Dari sisi *hardware*, bisa jadi perangkat jaringan terlalu lambat dalam melakukan *packet mirroring* atau mesin yang menjalankan Zeek tidak cukup kuat memproses *packet* yang masuk.  Namun, pada kasus yang saya hadapi, penyebabnya adalah konfigurasi sistem operasi sehingga bisa diselesaikan tanpa harus membeli perangkat baru.  Perangkat kartu jaringan (NIC) modern memiliki fitur *offloading* sehingga beberapa kalkulasi dilakukan oleh *network processor* yang berada di perangkat jaringan tanpa harus melibatkan CPU.  Namun, fitur ini justru menjadi penghalang pada saat NIC berperan sebagai pendengar pasif (bukan penerima maupun pengirim).
+
+Sebagai contoh, TCP offloading adalah fitur dimana sistem operasi tidak perlu menghitung *checksum* dan boleh membiarkan bagian tersebut kosong.  Nanti saat *packet* dikirim, *checksum* akan ditambahkan secara otomatis oleh NIC (dihitung oleh *network processor* tanpa membebani CPU).  Sebaliknya, saat *packet* diterima, NIC akan melakukan verifikasi *checksum* dan mengabaikan *packet* yang gagal diverifikasi sehingga sistem operasi tidak perlu memproses *packet* yang tidak valid.  Ini adalah fitur yang bagus untuk meningkatkan kinerja jaringan pada penggunaan normal, namun pada saat melakukan *packet capture*, fitur seperti ini dapat membuat *packet* tidak diterima dengan baik.
+
+Selain *checksum*, masih ada banyak fitur *offloading* NIC lainnya seperti TCP Segmentation Offload (TSO), Large Receive Offload (LRO) dan sebagainya.   Untuk melihat satus *offloading* di Ubuntu, saya dapat menggunakan `ethtool` diikuti dengan nama perangkat jaringan seperti pada contoh berikut ini:
+
+```shell "eth0"
+$ ethtool --show-offload eth0
+```
+
+Untuk mematikan sebuah fitur *offloading* di kartu jaringan, saya dapat menggunakan perintah seperti berikut ini:
+
+```shell "eth0"
+$ ethtool -K eth0 gso off
+$ ethtool -K eth0 rx off tx off
+```
+
+Setelah mematikan fasilitas NIC *offloading*, saya tidak menemukan lagi nilai `percent_lost` yang tinggi di `capture_loss.log`.  Namun, masih ada satu kendala yang belum terpecahkan: perubahan yang dilakukan dengan `ethtool` tidak permanen sehingga saat perangkat di-*restart*, fitur NIC *offloading* akan kembali aktif.  Bagaimana caranya supaya perubahan ini permanen?
+
+Sebelumnya, saya perlu mencari tahu *network management* yang dipakai di versi Ubuntu yang saya pakai.  Versi Ubuntu yang berbeda bisa saja menggunakan *network management* yang berbeda seperti yang ditunjukkan pada tulisan [Konfigurasi Jaringan Di Ubuntu Dengan Netplan](/blog/2021-11-17-jaringan-di-ubuntu-dengan-netplan).  Pada kasus ini, saya menggunakan Ubuntu Desktop yang menggunakan NetworkManager sebagai *network management*.  Oleh sebab itu, saya dapat melakukan konfigurasi dengan untuk konfigurasi jaringan dengan menggunakan `nmcli`.
+
+Untuk mematikan fitur NIC *offloading* dengan `nmcli`, saya memberikan perintah seperti berikut ini:
+
+```shell "Wired connection 1"
+$ nmcli connection modify "Wired connection 1" ethtool.feature-rx off ethtool.feature-tx off
+$ nmcli connection modify "Wired connection 1" ethtool.feature-gro off ethtool.feature-gso off
+```
+
+Untuk memastikan perubahannya sudah benar, saya me-*restart* mesin dan memastikan bahwa nilai `percent_lost` di `capture_loss.log` tetap nol.
